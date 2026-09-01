@@ -160,3 +160,7 @@
 ### [P1-T5] masking.py / deidentification.py 이식
 - `masking.py`는 3_5 원본 그대로. `deidentification.py`는 하드코딩 secret `b"audit-engine"` 제거, `secret` 필수(키워드 전용).
 - 테스트: 10 passed (마스킹 후 재스캔 0, secret 의존성·필수성).
+
+### [P1-T6] retention.py + 정책 JSON
+- 3_5 정책 유지 + `agent_query`(1년)/`agent_query_blocked`·`auth_denied`(3년)/`audit_shred`·`audit_unseal`(5년) 추가. 타임스탐프 오류 시 `now()` 대체 제거 → 예외.
+- 테스트: `test_retention.py` 8 passed.

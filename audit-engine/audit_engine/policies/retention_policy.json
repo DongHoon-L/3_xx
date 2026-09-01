@@ -1,0 +1,22 @@
+{
+  "_comment": "감사 로그 보관 기간 정책. action별 retention_days / category / legal_basis. 3_5 항목 유지 + rag-agent 액션 추가.",
+  "default_policy": {
+    "retention_days": 365,
+    "category": "일반 감사 로그 (1년)",
+    "legal_basis": "일반 내부 보안 정책"
+  },
+  "policies": {
+    "auth_login": {"retention_days": 365, "category": "인증/접근 로그 (1년)", "legal_basis": "개인정보보호법 / ISMS-P 인증 기준"},
+    "update_guardrail": {"retention_days": 365, "category": "보안 정책 변경 로그 (1년)", "legal_basis": "내부 정보보호 통제 지침"},
+    "export_pii": {"retention_days": 730, "category": "개인정보 추출 로그 (2년)", "legal_basis": "개인정보보호법 시행령 제31조"},
+    "grant_role": {"retention_days": 1095, "category": "권한 변경 로그 (3년)", "legal_basis": "정보보호 관리체계 안전성 확보 조치"},
+    "bulk_download": {"retention_days": 1095, "category": "이상 패턴 로그 (3년)", "legal_basis": "침해 사고 포렌식 및 사후 조사"},
+    "break_glass_access": {"retention_days": 1825, "category": "비상 관리자 접근 로그 (5년)", "legal_basis": "전자금융거래법 / SOC 2 Type II"},
+    "delete_audit_logs": {"retention_days": 1825, "category": "로그 삭제 침해 로그 (5년)", "legal_basis": "형법 업무방해 / 보안 감사 규정"},
+    "agent_query": {"retention_days": 365, "category": "AI 에이전트 질의 로그 (1년)", "legal_basis": "내부 AI 서비스 감사 지침"},
+    "agent_query_blocked": {"retention_days": 1095, "category": "프롬프트 인젝션 차단 로그 (3년)", "legal_basis": "침해 시도 증적 보존"},
+    "auth_denied": {"retention_days": 1095, "category": "인증 실패 로그 (3년)", "legal_basis": "ISMS-P 접근통제 증적"},
+    "audit_shred": {"retention_days": 1825, "category": "감사 키 파기 로그 (5년)", "legal_basis": "개인정보 파기 기록 의무"},
+    "audit_unseal": {"retention_days": 1825, "category": "감사 원문 열람 로그 (5년)", "legal_basis": "개인정보 열람 기록 의무"}
+  }
+}
