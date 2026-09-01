@@ -139,3 +139,7 @@
 - 사전 충돌 점검에서 계획 결함 1건 발견·수정: recorder가 record 전체에 `mask_record`를 적용하면 카드번호 정규식이 UUID `record_id`/hex 해시의 숫자 연속을 오탐할 수 있음(예: `11111111-2222-3333-4444-…` → `[CARD_MASKED]`, AAD/볼트 조회 파괴). → 마스킹을 `purpose`/`details`(자유 텍스트)로 한정하는 `protect_record`, 잔여 PII 검사 `residual_pii_count` 추가. 테스트도 체인 파일 전체 스캔 대신 record 자유 텍스트 필드 검사로 변경(hex 해시 오탐으로 인한 간헐 실패 방지). 스펙 §4.8의 "mask_record(event.to_dict())" 문구와의 차이는 의도된 것.
 - SDD 워크스페이스: `.superpowers/sdd/2026-09-01-audit-engine/` (git-ignored). 원장 `progress.md`에 사전 점검표·판정 기록.
 - 모델 선택: 구현자 haiku(계획에 전체 코드 포함 → 전사+테스트), 리뷰어 sonnet, 최종 전체 리뷰 fable.
+
+### [P1-T1] audit-engine 스캐폴딩
+- `pytest.ini`(importlib 모드), `.gitignore`, `audit-engine/pyproject.toml`, `errors.py`(예외 7종), `__init__.py` 작성. venv에 editable 설치 + pytest 설치.
+- 테스트: `test_errors.py` 3 passed.

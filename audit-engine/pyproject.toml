@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "audit-engine"
+version = "0.1.0"
+description = "Tamper-evident 5W1H audit engine: JSONL hash chain, AES-GCM sealing, crypto-shredding, PII masking"
+requires-python = ">=3.11"
+dependencies = ["cryptography>=42"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+include = ["audit_engine*"]
+
+[tool.setuptools.package-data]
+audit_engine = ["policies/*.json"]
