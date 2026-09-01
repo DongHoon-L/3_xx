@@ -11,10 +11,12 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from .errors import AuditStorageError, ChainCorruptError
+from .filelock import exclusive_lock, lock_path_for
 
 GENESIS_HASH = "GENESIS"
 HASH_ALGORITHMS = ("sha256", "sha512", "sha3_256")
 HASHED_FIELDS = ("seq", "record", "sealed", "retention", "previous_hash")
+TAIL_CHUNK_BYTES = 4096
 
 
 def canonical_json(obj: Any) -> str:
@@ -69,7 +71,15 @@ class ChainVerification:
 
 
 class HashChain:
-    """Single-writer-process chain. Concurrency inside one process is serialized by a lock."""
+    """Append-only chain, serialized by a thread lock inside the process and a file lock across processes.
+
+    `open()` is the preferred constructor: it verifies the whole file up front and refuses a corrupt
+    chain. A plain `HashChain(path)` starts with an empty in-memory tail; `append()` compares its
+    cached `(seq, entry_hash)` with the last line on disk and, whenever they differ (another process
+    appended, or the file was rewritten), re-walks the chain and resyncs — or raises `ChainCorruptError`
+    if that walk fails. The chain is therefore never forked, at the cost of an O(n) re-verify on the
+    first append after a foreign write.
+    """
 
     def __init__(self, path: str | os.PathLike[str], algorithm: str = "sha256") -> None:
         if algorithm not in HASH_ALGORITHMS:
@@ -77,6 +87,7 @@ class HashChain:
         self._path = Path(path)
         self._algorithm = algorithm
         self._lock = threading.Lock()
+        self._lock_path = lock_path_for(self._path)
         self._last_seq = 0
         self._last_hash = GENESIS_HASH
 
@@ -87,12 +98,7 @@ class HashChain:
     @classmethod
     def open(cls, path: str | os.PathLike[str], algorithm: str = "sha256") -> "HashChain":
         chain = cls(path, algorithm)
-        verification, last_seq, last_hash = chain._walk()
-        if not verification.valid:
-            raise ChainCorruptError(
-                f"chain {chain._path} failed verification at seq={verification.failed_seq}: {verification.reason}"
-            )
-        chain._last_seq, chain._last_hash = last_seq, last_hash
+        chain._resync()
         return chain
 
     def verify(self) -> ChainVerification:
@@ -125,8 +131,55 @@ class HashChain:
             raise AuditStorageError(f"cannot read chain {self._path}: {exc.__class__.__name__}") from exc
         return ChainVerification(True, checked), expected_seq - 1, expected_prev
 
+    def _last_line(self) -> str | None:
+        """The last non-empty line of the chain file, read from the end (None if absent or empty)."""
+        if not self._path.exists():
+            return None
+        try:
+            with self._path.open("rb") as fh:
+                fh.seek(0, os.SEEK_END)
+                position, tail = fh.tell(), b""
+                while position > 0:
+                    step = min(TAIL_CHUNK_BYTES, position)
+                    position -= step
+                    fh.seek(position)
+                    tail = fh.read(step) + tail
+                    trimmed = tail.rstrip()
+                    if b"\n" in trimmed:
+                        return trimmed[trimmed.rindex(b"\n") + 1:].decode("utf-8", "replace")
+        except OSError as exc:
+            raise AuditStorageError(f"cannot read chain {self._path}: {exc.__class__.__name__}") from exc
+        trimmed = tail.strip()
+        return trimmed.decode("utf-8", "replace") if trimmed else None
+
+    def _tail_is_current(self) -> bool:
+        """True when the on-disk tail is intact and is exactly the entry this instance last wrote."""
+        line = self._last_line()
+        if line is None:
+            return self._last_seq == 0 and self._last_hash == GENESIS_HASH
+        try:
+            entry = ChainEntry.from_dict(json.loads(line))
+        except (ValueError, KeyError, TypeError):
+            return False
+        if (entry.seq, entry.entry_hash) != (self._last_seq, self._last_hash):
+            return False
+        # The link matches, but the tail entry itself may have been edited without touching its
+        # entry_hash; recomputing it costs one hash and stops us extending a tampered tail.
+        return compute_entry_hash(entry.to_dict(), self._algorithm) == entry.entry_hash
+
+    def _resync(self) -> None:
+        """Re-verify the whole file and adopt its tail. Fail closed rather than fork the chain."""
+        verification, last_seq, last_hash = self._walk()
+        if not verification.valid:
+            raise ChainCorruptError(
+                f"chain {self._path} failed verification at seq={verification.failed_seq}: {verification.reason}"
+            )
+        self._last_seq, self._last_hash = last_seq, last_hash
+
     def append(self, record: dict, sealed: dict | None, retention: dict) -> ChainEntry:
-        with self._lock:
+        with self._lock, exclusive_lock(self._lock_path):
+            if not self._tail_is_current():
+                self._resync()
             seq = self._last_seq + 1
             partial = {
                 "seq": seq,

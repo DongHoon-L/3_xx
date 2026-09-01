@@ -3,7 +3,7 @@ import json
 import pytest
 
 from audit_engine.crypto import KEY_BYTES, KeyVault, generate_key, seal, unseal, vault_record_ids
-from audit_engine.errors import AuditStorageError, KeyNotFoundError, SealIntegrityError
+from audit_engine.errors import AuditStorageError, AuditValidationError, KeyNotFoundError, SealIntegrityError
 
 KEK = b"\x01" * 32
 OTHER_KEK = b"\x02" * 32
@@ -86,6 +86,42 @@ def test_vault_record_ids_without_kek(tmp_path):
     vault.put("b", generate_key())
     vault.shred("a")
     assert vault_record_ids(path) == {"b"}
+
+
+def test_put_refuses_an_existing_record_id(tmp_path):
+    vault = KeyVault(tmp_path / "vault.json", KEK)
+    first = generate_key()
+    vault.put("req-1", first)
+    with pytest.raises(AuditValidationError) as exc:
+        vault.put("req-1", generate_key())
+    assert exc.value.field == "record_id"
+    assert vault.get("req-1") == first  # the stored key is never silently replaced
+
+
+def test_two_vault_instances_on_one_file_keep_both_keys(tmp_path):
+    """Second writer (e.g. the operator CLI): the file lock makes the read-modify-write atomic."""
+    path = tmp_path / "vault.json"
+    a, b = KeyVault(path, KEK), KeyVault(path, KEK)
+    key_a, key_b = generate_key(), generate_key()
+    a.put("id-a", key_a)
+    b.put("id-b", key_b)
+    assert vault_record_ids(path) == {"id-a", "id-b"}
+    assert a.get("id-b") == key_b and b.get("id-a") == key_a
+    assert b.shred("id-a") is True
+    assert vault_record_ids(path) == {"id-b"} and not a.has("id-a")
+
+
+@pytest.mark.parametrize("content", ["{broken", '["not", "an", "object"]', '"text"'])
+def test_corrupt_vault_file_is_a_storage_error(tmp_path, content):
+    path = tmp_path / "vault.json"
+    path.write_text(content, encoding="utf-8")
+    with pytest.raises(AuditStorageError) as exc:
+        vault_record_ids(path)
+    assert "corrupt" in str(exc.value)
+    for call in (lambda v: v.has("x"), lambda v: v.get("x"), lambda v: v.shred("x"),
+                 lambda v: v.put("x", generate_key())):
+        with pytest.raises(AuditStorageError):
+            call(KeyVault(path, KEK))
 
 
 def test_vault_unwritable_raises_storage_error(tmp_path):

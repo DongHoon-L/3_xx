@@ -2,7 +2,14 @@ import json
 
 import pytest
 
-from audit_engine.chain import GENESIS_HASH, ChainEntry, HashChain, canonical_json, compute_entry_hash
+from audit_engine.chain import (
+    GENESIS_HASH,
+    ChainEntry,
+    ChainVerification,
+    HashChain,
+    canonical_json,
+    compute_entry_hash,
+)
 from audit_engine.errors import AuditStorageError, ChainCorruptError
 
 RETENTION = {"retention_days": 365, "retention_until": "2027-09-01", "legal_basis": "test", "category": "test"}
@@ -109,6 +116,50 @@ def test_unwritable_path_raises_storage_error(tmp_path):
     blocked.mkdir()  # a directory where the file should be
     with pytest.raises(AuditStorageError):
         HashChain(blocked).append(make_record(1), None, RETENTION)
+
+
+def test_two_instances_appending_alternately_stay_linked(tmp_path):
+    """Second writer (e.g. the operator CLI): each append resyncs from the on-disk tail."""
+    path = tmp_path / "chain.jsonl"
+    a, b = HashChain(path), HashChain(path)
+    entries = [a.append(make_record(1), None, RETENTION), b.append(make_record(2), None, RETENTION),
+               a.append(make_record(3), None, RETENTION), b.append(make_record(4), None, RETENTION)]
+    assert [e.seq for e in entries] == [1, 2, 3, 4]
+    assert HashChain(path).verify() == ChainVerification(True, 4)
+    assert len(read_lines(path)) == 4
+
+
+def test_append_on_tampered_interior_refuses_and_writes_nothing(tmp_path):
+    path = tmp_path / "chain.jsonl"
+    fill(HashChain(path), 3)
+    rows = read_lines(path)
+    rows[1]["record"]["purpose"] = "TAMPERED"
+    write_lines(path, rows)
+    stale = HashChain(path)  # never opened: its (seq, hash) do not match the tail, so it must re-walk
+    with pytest.raises(ChainCorruptError):
+        stale.append(make_record(4), None, RETENTION)
+    assert len(read_lines(path)) == 3
+
+
+def test_append_after_the_tail_was_tampered_refuses(tmp_path):
+    path = tmp_path / "chain.jsonl"
+    chain = HashChain(path)
+    fill(chain, 2)
+    rows = read_lines(path)
+    rows[-1]["record"]["purpose"] = "TAMPERED"
+    write_lines(path, rows)
+    with pytest.raises(ChainCorruptError):
+        chain.append(make_record(3), None, RETENTION)
+    assert len(read_lines(path)) == 2
+
+
+def test_append_resyncs_after_the_file_was_replaced_by_a_shorter_valid_chain(tmp_path):
+    path = tmp_path / "chain.jsonl"
+    chain = HashChain(path)
+    fill(chain, 3)
+    write_lines(path, read_lines(path)[:1])  # a valid 1-entry chain: resync, do not fork
+    fourth = chain.append(make_record(4), None, RETENTION)
+    assert fourth.seq == 2 and chain.verify().valid
 
 
 def test_algorithm_allowlist(tmp_path):
