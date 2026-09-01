@@ -164,3 +164,7 @@
 ### [P1-T6] retention.py + 정책 JSON
 - 3_5 정책 유지 + `agent_query`(1년)/`agent_query_blocked`·`auth_denied`(3년)/`audit_shred`·`audit_unseal`(5년) 추가. 타임스탐프 오류 시 `now()` 대체 제거 → 예외.
 - 테스트: `test_retention.py` 8 passed.
+
+### [P1-T7] config.py
+- `AuditConfig.from_env`: `AUDIT_PSEUDONYM_SECRET`(≥16자)·`AUDIT_KEK_B64`(32B) 필수, 알고리즘 허용목록, 정책 파일 존재 검사. `repr`에 비밀값 미노출.
+- 테스트: `test_config.py` 10 passed.
