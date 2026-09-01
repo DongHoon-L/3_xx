@@ -178,3 +178,8 @@
 - `verify`(실패 seq/사유 JSON), `report`(집계·만료·봉인/파기·잔여 PII 재스캔·이상 목록, `--out`), `shred --record-id|--expired --actor`, `unseal --record-id --actor`, `keygen`. shred/unseal은 `audit_shred`/`audit_unseal` 이벤트로 체인에 기록됨(파기 후 기록 순서 — 기록 실패 시 stderr에 error, exit 1).
 - 테스트: audit-engine 전체 87 passed. audit-engine 계획 완료.
 - 리뷰 수정: shred는 감사 이벤트를 먼저 기록(write-ahead, result shred_requested:<n>)한 뒤 키를 파기; report --out 쓰기 실패는 AuditStorageError로 정리 종료. 회귀 테스트 2건 추가.
+
+### [P1 완료] audit-engine 계획 종료 (컨트롤러 기록)
+- Task 1~9 모두 구현·리뷰 통과. 수정 라운드 2회: T4(볼트 임시 파일 정리), T9(shred 감사 이벤트 write-ahead + `--out` 실패 정리 종료). 최종 테스트 89 passed.
+- 스펙 대비 의도된 변경(원장 판정): ① recorder 마스킹을 purpose/details로 한정 ② `shred`는 키 파기 **전에** `audit_shred`(result `shred_requested:<n>`) 기록 — 스펙 §4.9의 "파기 후 기록"보다 감사 가능성이 우선 ③ 예외 계층을 `errors.py`로 분리, `AuditStorageError` 추가.
+- 리뷰에서 보류(Minor)된 항목은 `.superpowers/sdd/2026-09-01-audit-engine/progress.md` 원장에 기록, 최종 전체 리뷰에서 재판정.
