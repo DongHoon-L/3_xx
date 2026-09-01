@@ -30,6 +30,11 @@ case "${1:-start}" in
       echo "already running (pid $(cat "$PIDFILE")) — http://localhost:$PORT"
       exit 0
     fi
+    if healthy; then
+      echo "a llama server already answers on http://localhost:$PORT (started outside this script) — nothing to do"
+      echo "to take it over: $0 stop && $0 start"
+      exit 0
+    fi
     setsid nohup "$LLAMA" "${ARGS[@]}" >"$LOG" 2>&1 < /dev/null &
     echo $! >"$PIDFILE"
     echo "starting pid $! (model load takes a few minutes) — log: $LOG"
@@ -46,11 +51,20 @@ case "${1:-start}" in
     echo "still loading after 6 minutes — check: $0 logs"; exit 1
     ;;
   stop)
-    if is_running; then kill "$(cat "$PIDFILE")"; rm -f "$PIDFILE"; echo "stopped"; else echo "not running"; fi
+    if is_running; then
+      kill "$(cat "$PIDFILE")"; rm -f "$PIDFILE"; echo "stopped"
+    elif healthy; then
+      pkill -f "$LLAMA serve" && echo "stopped a llama server that was started outside this script" || echo "could not find the server process"
+      rm -f "$PIDFILE"
+    else
+      rm -f "$PIDFILE"; echo "not running"
+    fi
     ;;
   status)
     if is_running; then
       echo "running (pid $(cat "$PIDFILE"))"; healthy && echo "health: ok — http://localhost:$PORT" || echo "health: not ready yet"
+    elif healthy; then
+      echo "not started by this script, but a llama server answers on http://localhost:$PORT"
     else
       echo "not running"
     fi
