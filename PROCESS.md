@@ -267,3 +267,6 @@
 ### [후속] 사용자용 테스트 시나리오 러너 추가
 - `scripts/scenario.py`: 실행 중인 서버에 HTTP 12단계(인증 401×2, 코퍼스/일반 질문, 직접·한국어·난독화 인젝션 403, 오염 문서·평문 키 문서 무유출, 413, `/documents` id만) + 감사 CLI 7단계(verify → report → unseal 원문 복원 → shred → unseal 거부 → verify → report 이상 없음)를 PASS/FAIL로 출력. `.env`에서 토큰·감사 설정을 읽고, CLI 자식 프로세스는 `PYTHONUTF8=1`로 실행(콘솔 코드페이지와 무관하게 한글 payload 복원).
 - 검증: mock 모드 임시 서버(포트 8766, 스크래치 audit-data)에 대해 19/19 PASS. README에 "테스트 시나리오" 절 추가.
+
+### [후속] README에 "연동 방식" 절 추가
+- 감사 엔진 Add-on 연동 구조를 설명용으로 정리해 README에 추가: 한 방향 의존·단일 접점(`audit_hook.py`), 요청 1건의 5단계 흐름과 실패 시 상태코드/감사 이벤트 표, `record()` 내부 5단계, CLI 요약, 신뢰 경계 표, 알려진 한계.

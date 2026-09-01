@@ -12,6 +12,53 @@ audit-engine/   audit_engine 패키지 — schema · chain(JSONL 해시체인) �
 rag-agent/      rag_agent 패키지 — auth(Bearer 허용목록) · guard(SR-01/02/03) · retriever(TF-IDF) · llm(OpenAI 호환/Mock) · agent · audit_hook · api(FastAPI)
 ```
 
+## 연동 방식 (감사 엔진 Add-on)
+
+한 문장으로: **RAG 에이전트의 요청 처리 한가운데에 감사 엔진 호출을 한 지점(`rag_agent/audit_hook.py`)으로 끼워 넣고, 감사 기록이 실패하면 답변을 내보내지 않는(fail-closed) 실시간 Add-on.**
+
+### 두 패키지, 한 방향 의존
+- `audit_engine` — RAG를 모르는 독립 패키지: 5W1H 이벤트 스키마, JSONL 해시체인, AES-256-GCM 봉인 + KEK 래핑 볼트, 마스킹/가명화, 보존 정책, 운영 CLI.
+- `rag_agent` — `audit_engine`을 의존성으로 설치해 사용. 반대 방향 의존 없음.
+- 접점은 `audit_hook.py` 하나뿐이며, 훅은 `AuditRecorder.record(event, sensitive)` 한 함수만 호출한다. 에이전트 본체는 감사 방식을 모른다.
+
+### 요청 1건의 흐름 (`POST /agent`)
+| 순서 | 단계 | 실패 시 |
+|---|---|---|
+| 1 | 본문 크기 상한(64 KB, 본문 읽기 전) | 413 (미감사) |
+| 2 | Bearer 토큰을 서버 허용목록(`RAG_API_KEYS=토큰:사용자:역할`)과 상수시간 비교 → **actor 확정** | 401 + `auth_denied` 이벤트 |
+| 3 | 질문 가드 SR-01/02(정규화 후 검사) → 도구 선택(목록/RAG/일반) → RAG면 TF-IDF 검색 후 문서 정화 SR-03(명령문 REDACT·평문 키 MASK·"데이터" 펜스) → WSL llama.cpp(OpenAI 호환) 호출 → 출력 필터(비밀 패턴·PII) | 403 `agent_query_blocked` / 502 `error:*` / 500 `error:internal` — 모두 감사됨 |
+| 4 | 훅이 `AgentTrace`를 5W1H 이벤트 1건으로 변환: actor·role / UTC / `rag-agent/agent` / `agent_query` / IP / 질문 앞 200자 / result + `details`(도구, 문서 id, 탐지 라벨, 모델, 지연, 답변 다이제스트, 출력 마스킹) | — |
+| 5 | **감사 기록 성공 시에만** 응답 | 503 `audit_unavailable`, 답변 폐기 |
+
+원칙: **감사되지 않은 답변은 존재하지 않는다.** 서버 로그에는 매 요청의 `audit_seq`/`audit_hash`가 남아 외부 앵커로 쓰인다.
+
+### 감사 엔진 안에서 `record()`가 하는 일
+1. 검증 — 필수값·UTC 타임스탬프 형식 아니면 거부.
+2. 보호본 — `actor`는 HMAC 가명(`P-…`, 비밀키는 env 필수), `purpose`/`details`는 정규식 PII 마스킹. 식별자·타임스탬프는 그대로.
+3. 봉인 — 질문·답변·정화된 문맥 원문을 AES-256-GCM(AAD=record_id)으로 암호화. 엔트리마다 새 DEK, DEK는 KEK로 감싸 볼트에 저장.
+4. 체인 append — `chain.jsonl`에 한 줄. 이전 해시를 포함하므로 중간 수정·삭제는 `verify`가 위치·사유로 탐지. 암호문도 해시 대상이라 키를 파기해도 체인은 계속 검증된다.
+5. 보존 — action별 정책(차단 3년, 파기/열람 기록 5년 등)을 엔트리에 기록.
+
+체인 파일에는 가명·마스킹된 요약·암호문만 있고, 원문 열람(`unseal`)은 KEK를 가진 운영자만 가능하며 그 열람도 체인에 기록된다.
+
+### 운영 CLI 한눈에
+`verify`(비밀키 없이 무결성, `--expect-tail`로 앵커 대조) · `report`(집계·만료·잔여 PII·고아 키/미감사 파기 이상 징후) · `unseal`(조사용 복호화, 감사됨) · `shred`(DEK 파기 = crypto-shredding, "파기 예정"을 먼저 기록하는 write-ahead). 서비스와 CLI는 파일 잠금으로 동시 실행 안전.
+
+### 신뢰 경계
+| 공격자 | 통제 |
+|---|---|
+| 미인증 클라이언트 | 토큰 없이는 아무것도 못 함, 시도가 기록됨 |
+| 인증 사용자의 프롬프트 인젝션 | 가드 403 + 라벨 기록 |
+| 오염 문서(간접 인젝션) | 문서를 데이터로 격하, 출력 필터 |
+| 파일에 손대는 내부자 | 체인 검증 + 볼트 암호화 + 외부 앵커 |
+| 모델 출력 | 항상 비신뢰 텍스트(실행·URL 호출 없음) |
+
+### 알려진 한계
+- 정규식 가드는 lab03 이식본 + 정규화 수준의 실습용 통제 — 새로운 표현엔 뚫릴 수 있음(보상 통제: 감사 추적·출력 필터).
+- 익명 요청 폭주 시 `auth_denied` 기록으로 체인이 계속 자람(레이트리밋은 범위 밖).
+- 파일 전체 재작성은 체인만으로는 못 잡고 외부 앵커(`verify --expect-tail`)가 필요.
+- 서비스는 프로세스 1개(`uvicorn --workers 1`) 전제.
+
 ## 사전 조건
 - venv: `../../prism` (Python 3.14). 모든 명령은 이 폴더(`3_xx`)에서 `../../prism/Scripts/python.exe`로 실행.
 - WSL(Ubuntu-24.04)에 `~/.llama-app/llama`와 모델 `huihui-ai/Huihui-Qwen3.8-27B-abliterated-GGUF:Q4_K_XL` 캐시.
