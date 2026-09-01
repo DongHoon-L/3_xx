@@ -143,3 +143,7 @@
 ### [P1-T1] audit-engine 스캐폴딩
 - `pytest.ini`(importlib 모드), `.gitignore`, `audit-engine/pyproject.toml`, `errors.py`(예외 7종), `__init__.py` 작성. venv에 editable 설치 + pytest 설치.
 - 테스트: `test_errors.py` 3 passed.
+
+### [P1-T2] schema.py
+- `AuditEvent`(10필드 + `details`), `validate()`(필수값·UTC Z 타임스탬프·details 문자열 맵), `utc_now`, `parse_timestamp`.
+- 테스트: `test_schema.py` 13 passed.
