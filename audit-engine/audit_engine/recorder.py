@@ -66,16 +66,18 @@ class AuditRecorder:
         """Append one protected event. Raises AuditError subclasses; never swallows failures."""
         event.validate()
         protected = protect_record(event, self._config.pseudonym_secret)
+        retention = self._policy.for_event(event)  # pure computation: keep chain.append the only step after put
 
         sealed = None
         if sensitive is not None:
-            if self._vault.has(event.record_id):
-                raise AuditValidationError("record_id", "a data key already exists for this record_id")
+            try:
+                payload = canonical_json(sensitive).encode("utf-8")
+            except (TypeError, ValueError) as exc:
+                raise AuditValidationError("sensitive", "must be JSON-serializable") from exc
             dek = generate_key()
-            sealed = seal(canonical_json(sensitive).encode("utf-8"), dek, event.record_id.encode("utf-8"))
-            self._vault.put(event.record_id, dek)
+            sealed = seal(payload, dek, event.record_id.encode("utf-8"))
+            self._vault.put(event.record_id, dek)  # rejects a duplicate record_id under the vault lock
 
-        retention = self._policy.for_event(event)
         return self._chain.append(protected, sealed, retention)
 
     def unseal(self, entry: ChainEntry) -> dict:

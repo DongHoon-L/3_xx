@@ -6,7 +6,14 @@ import pytest
 from audit_engine import AuditEvent, AuditRecorder
 from audit_engine.config import AuditConfig
 from audit_engine.crypto import KeyVault
-from audit_engine.errors import AuditError, AuditStorageError, AuditValidationError, KeyNotFoundError, SealIntegrityError
+from audit_engine.errors import (
+    AuditConfigError,
+    AuditError,
+    AuditStorageError,
+    AuditValidationError,
+    KeyNotFoundError,
+    SealIntegrityError,
+)
 from audit_engine.recorder import residual_pii_count
 
 KEK = b"\x09" * 32
@@ -97,6 +104,31 @@ def test_duplicate_record_id_with_sensitive_rejected(recorder):
     assert exc.value.field == "record_id"
 
 
+def test_non_serializable_sensitive_is_a_validation_error(recorder, tmp_path):
+    with pytest.raises(AuditValidationError) as exc:
+        recorder.record(make_event(), sensitive={"question": object()})
+    assert exc.value.field == "sensitive"
+    assert not (tmp_path / "chain.jsonl").exists() and not recorder.vault.has("req-1")
+
+
+def test_corrupt_vault_propagates_as_storage_error(tmp_path):
+    recorder = AuditRecorder.from_env(env_for(tmp_path))
+    (tmp_path / "vault.json").write_text("{not json", encoding="utf-8")
+    with pytest.raises(AuditStorageError):
+        recorder.record(make_event(), sensitive={"q": "x"})
+
+
+def test_retention_failure_leaves_no_orphan_key(recorder, monkeypatch):
+    """Retention is computed before the DEK is stored, so a policy failure cannot orphan a key."""
+    def boom(event):
+        raise AuditValidationError("timestamp", "boom")
+
+    monkeypatch.setattr(recorder.policy, "for_event", boom)
+    with pytest.raises(AuditValidationError):
+        recorder.record(make_event(), sensitive={"q": "x"})
+    assert not recorder.vault.has("req-1")
+
+
 def test_storage_failure_propagates_as_audit_error(tmp_path):
     recorder = AuditRecorder.from_env(env_for(tmp_path))
     (tmp_path / "chain.jsonl").mkdir()  # make the chain path unwritable
@@ -110,6 +142,13 @@ def test_reopen_continues_chain(tmp_path):
     AuditRecorder.from_env(env).record(make_event(record_id="a"))
     second = AuditRecorder.from_env(env).record(make_event(record_id="b"))
     assert second.seq == 2
+
+
+def test_malformed_policy_file_fails_startup(tmp_path):
+    policy = tmp_path / "policy.json"
+    policy.write_text('{"default_policy": {"legal_basis": "no days"}}', encoding="utf-8")
+    with pytest.raises(AuditConfigError):
+        AuditRecorder.from_env(env_for(tmp_path, AUDIT_RETENTION_POLICY=str(policy)))
 
 
 def test_from_env_reads_process_environment(tmp_path, monkeypatch):

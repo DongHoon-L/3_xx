@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import base64
-import binascii
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -44,7 +43,7 @@ class AuditConfig:
 
         try:
             kek = base64.b64decode(source.get("AUDIT_KEK_B64", ""), validate=True)
-        except (ValueError, binascii.Error) as exc:
+        except ValueError as exc:  # binascii.Error is a ValueError subclass
             raise AuditConfigError("AUDIT_KEK_B64 must be valid base64") from exc
         if len(kek) != KEK_BYTES:
             raise AuditConfigError(f"AUDIT_KEK_B64 must decode to exactly {KEK_BYTES} bytes")
