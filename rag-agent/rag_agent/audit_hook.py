@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 from uuid import uuid4
 
@@ -14,8 +15,12 @@ ASSET = "rag-agent/agent"
 PURPOSE_MAX_CHARS = 200
 
 
-def _sha256(text: str | None) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest() if text else ""
+def _digest_b64url(text: str | None) -> str:
+    """SHA-256 as unpadded base64url. Hex would be a 64-character digit-and-letter run, and a run of 16
+    digits inside it is mangled by the card pattern in mask_record — the digest is not PII, only noise."""
+    if not text:
+        return ""
+    return base64.urlsafe_b64encode(hashlib.sha256(text.encode("utf-8")).digest()).decode("ascii").rstrip("=")
 
 
 class AuditHook:
@@ -48,7 +53,7 @@ class AuditHook:
                 "context_findings": ",".join(trace.context_findings),
                 "llm_model": trace.llm_model,
                 "latency_ms": str(trace.latency_ms),
-                "answer_sha256": _sha256(trace.answer),
+                "answer_digest_b64url": _digest_b64url(trace.answer),
                 "output_masked": str(trace.output_masked).lower(),
             },
         )

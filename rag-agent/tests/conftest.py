@@ -17,9 +17,21 @@ def app_env(tmp_path, monkeypatch):
         "AUDIT_VAULT_PATH": str(tmp_path / "vault.json"),
         "RAG_API_KEYS": f"{TOKEN}:alice:analyst",
         "LLM_PROVIDER": "mock",
+        # every optional variable pinned to its documented default: create_app() reads os.environ (and
+        # loads .env), so without this a developer's local .env would change what the tests exercise
+        "AUDIT_HASH_ALGORITHM": "sha256",
+        "LLM_BASE_URL": "http://localhost:8080/v1",
+        "LLM_MODEL": "local",
+        "LLM_TIMEOUT_S": "120",
+        "LLM_MAX_TOKENS": "512",
+        "LLM_DISABLE_THINKING": "true",
+        "RAG_TOP_K": "2",
+        "RAG_MAX_QUESTION_CHARS": "2000",
     }
     for key, value in values.items():
         monkeypatch.setenv(key, value)
+    for key in ("LLM_API_KEY", "RAG_DOCUMENTS_PATH", "AUDIT_RETENTION_POLICY"):
+        monkeypatch.delenv(key, raising=False)  # these have no fixed default value to pin
     return tmp_path
 
 

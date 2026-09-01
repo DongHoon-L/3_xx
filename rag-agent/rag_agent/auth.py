@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import hmac
+import re
 from dataclasses import dataclass
 from typing import Mapping
+
+BEARER_RE = re.compile(r"(?i)^bearer\s+(.+)$")  # RFC 7235: the scheme name is case-insensitive
 
 
 @dataclass(frozen=True)
@@ -40,9 +43,10 @@ def parse_api_keys(raw: str) -> dict[str, Principal]:
 
 
 def authenticate(authorization: str | None, keys: Mapping[str, Principal]) -> Principal:
-    if not authorization or not authorization.startswith("Bearer "):
-        raise AuthError("missing_token")
-    presented = authorization[len("Bearer "):].strip().encode("utf-8")
+    match = BEARER_RE.match(authorization or "")
+    if not match:
+        raise AuthError("missing_token")  # any other scheme is treated as no token at all
+    presented = match.group(1).strip().encode("utf-8")
     if not presented:
         raise AuthError("missing_token")
     matched: Principal | None = None

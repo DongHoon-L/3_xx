@@ -45,10 +45,12 @@ def test_answered_query_event(recorder, tmp_path):
     assert record["asset"] == "rag-agent/agent" and record["source_ip"] == "10.0.0.7"
     assert record["record_id"] == "11111111-2222-3333-4444-555555555555"
     assert "example.com" not in record["purpose"] and "[EMAIL_MASKED]" in record["purpose"]
+    # base64url, not hex: a hex digest can contain a 16-digit run that mask_record rewrites as a card number
+    expected_digest = base64.urlsafe_b64encode(hashlib.sha256("서울은 덥다".encode("utf-8")).digest()).decode().rstrip("=")
     assert record["details"] == {
         "tool": "rag_answer", "reason": "코퍼스 관련도 0.42", "doc_ids": "weather,policy", "guard_findings": "",
         "context_findings": "SR-03:doc-urgency", "llm_model": "qwen", "latency_ms": "37",
-        "answer_sha256": hashlib.sha256("서울은 덥다".encode("utf-8")).hexdigest(), "output_masked": "false",
+        "answer_digest_b64url": expected_digest, "output_masked": "false",
     }
     assert recorder.unseal(entry) == {"question": "내 메일 sample.user@example.com 로 날씨 알려줘", "answer": "서울은 덥다", "contexts": ["[doc:weather]\n..."]}
     assert residual_pii_count(entry.record) == 0
@@ -61,7 +63,7 @@ def test_blocked_query_event(recorder):
     record = AuditHook(recorder).record_query(trace, ALICE, "10.0.0.7").record
     assert record["action"] == "agent_query_blocked"
     assert record["result"] == "blocked:SR-01:system-override,SR-02:ask-api-key"
-    assert record["details"]["answer_sha256"] == "" and record["details"]["guard_findings"] == "SR-01:system-override,SR-02:ask-api-key"
+    assert record["details"]["answer_digest_b64url"] == "" and record["details"]["guard_findings"] == "SR-01:system-override,SR-02:ask-api-key"
 
 
 def test_error_query_event(recorder):

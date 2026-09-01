@@ -18,14 +18,20 @@ def test_parse_api_keys_rejects_bad_input(raw):
         parse_api_keys(raw)
 
 
-def test_authenticate_success():
-    assert authenticate("Bearer tok-bob-9876543210", KEYS).actor == "bob"
+@pytest.mark.parametrize("header", [
+    "Bearer tok-bob-9876543210",
+    "bearer tok-bob-9876543210",   # the scheme name is case-insensitive (RFC 7235)
+    "BEARER  tok-bob-9876543210",
+])
+def test_authenticate_success(header):
+    assert authenticate(header, KEYS).actor == "bob"
 
 
 @pytest.mark.parametrize("header,reason", [
     (None, "missing_token"),
     ("", "missing_token"),
     ("Basic abc", "missing_token"),
+    ("BearerX tok-bob-9876543210", "missing_token"),
     ("Bearer ", "missing_token"),
     ("Bearer wrong-token-000000000", "invalid_token"),
     ("Bearer tok-alice-012345678", "invalid_token"),  # prefix of a real token
