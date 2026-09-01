@@ -93,3 +93,11 @@ def test_vault_unwritable_raises_storage_error(tmp_path):
     blocked.mkdir()
     with pytest.raises(AuditStorageError):
         KeyVault(blocked, KEK).put("req-1", generate_key())
+
+
+def test_failed_save_leaves_no_temp_file(tmp_path):
+    blocked = tmp_path / "vault.json"
+    blocked.mkdir()
+    with pytest.raises(AuditStorageError):
+        KeyVault(blocked, KEK).put("req-1", generate_key())
+    assert list(tmp_path.glob(".vault-*.tmp")) == []

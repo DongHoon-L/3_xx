@@ -76,6 +76,7 @@ class KeyVault:
             raise AuditStorageError(f"cannot read vault {self._path}: {exc.__class__.__name__}") from exc
 
     def _save(self, vault: dict) -> None:
+        tmp_name: str | None = None
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
             fd, tmp_name = tempfile.mkstemp(dir=self._path.parent, prefix=".vault-", suffix=".tmp")
@@ -84,8 +85,12 @@ class KeyVault:
                 fh.flush()
                 os.fsync(fh.fileno())
             os.replace(tmp_name, self._path)
+            tmp_name = None  # replaced successfully; nothing to clean up
         except OSError as exc:
             raise AuditStorageError(f"cannot write vault {self._path}: {exc.__class__.__name__}") from exc
+        finally:
+            if tmp_name is not None and os.path.exists(tmp_name):
+                os.unlink(tmp_name)
 
     def put(self, record_id: str, dek: bytes) -> None:
         nonce = secrets.token_bytes(NONCE_BYTES)
