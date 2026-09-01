@@ -45,10 +45,13 @@ curl -s localhost:8000/agent -d '{"question":"hi"}' -H "Content-Type: applicatio
 
 | 상황 | 코드 | 감사 이벤트 |
 |---|---|---|
+| 본문 64KiB 초과 또는 길이 미상(chunked) | 413 `body too large` | 없음 — 인증 전, 본문을 읽기 전에 거부 |
 | 토큰 없음/불일치 | 401 | `auth_denied` |
+| 본문 형식 오류 (`question` 필드 없음) | 422 | 없음 — 인증 **후** 검증이므로 미인증 요청은 401이 먼저 나간다 |
 | 질문 비어있음/길이 초과 | 400 | 없음 |
 | 가드 차단 (SR-01/02) | 403 | `agent_query_blocked` |
 | LLM 오류/타임아웃 | 502 | `agent_query` result=`error:*` |
+| 예상치 못한 내부 예외 | 500 (본문에 예외 내용 없음) | `agent_query` result=`error:internal` |
 | 감사 기록 실패 | 503 `audit_unavailable` — 답변 폐기 | — |
 
 ## 감사 CLI
@@ -73,6 +76,10 @@ CLI는 서비스가 떠 있는 상태에서 실행해도 안전하다: 체인/�
 
 ## 보안 메모
 - 모델 출력은 비신뢰 텍스트. 출력 필터(비밀 패턴 + PII)가 응답 직전에 적용된다.
+- **가드는 lab03에서 이식한 정규식 시연이다.** NFKC·zero-width 제거·구분자 접기로 `S Y S T E M   O V E R R I D E`, `ＳＹＳＴＥＭ`, `SYSTEM_OVERRIDE` 같은 난독화까지는 잡고, 정화 후에도 명령형 문구가 남으면 문서 본문 전체를 `[REDACTED-BY-SR03: obfuscated instruction]`으로 버린다. 그래도 abliterated 모델에 대한 완전한 방어는 아니다 — 바꿔 쓴 지시는 통과할 수 있고, 실제 보상 통제는 **감사 추적과 출력 필터**다.
+- 앱 로그에는 `agent_query`/`auth_denied` 한 줄마다 `audit_seq`/`audit_hash`가 남는다. 이 값이 `verify --expect-tail SEQ:HASH`의 외부 앵커다(로그와 체인이 서로를 검증한다).
+- 앱 로그의 `actor`는 **평문**이다(체인의 `P-…` 가명과 달리). 즉 로그를 가진 사람은 `request_id`↔실명 대응을 얻으므로, 로그는 가명 매핑과 같은 등급으로 보호·보존해야 한다.
+- 미인증 요청 하나마다 `auth_denied` 엔트리가 1건 append+fsync된다. 레이트 리밋은 비범위라, 익명 요청 폭주는 체인을 무한히 키우고(`verify`는 O(n)) 디스크를 소모한다 — 노출 전에 IP별 실패 예산이나 리버스 프록시 레이트 리밋을 반드시 앞에 둘 것. 본문 크기 상한(64KiB, 413)만으로는 건수를 막지 못한다.
 - 체인/볼트 하나당 서비스 프로세스는 하나(`uvicorn --workers 1`). 다중 워커/프로세스는 지원하지 않는다 — 같은 파일을 여러 워커가 쓰면 잠금 덕에 손상되지는 않지만 append마다 O(n) 재검증이 걸려 성능이 무너진다.
 - `AuditRecorder.record()`는 fsync에서 블로킹된다(체인 append + `sensitive`가 있으면 볼트 전체 재작성). 응답 지연에 반영된다.
 - 비밀값(`AUDIT_*`, `RAG_API_KEYS`, `LLM_API_KEY`)은 `.env`에만 두고 커밋하지 않는다(`.gitignore` 처리됨).

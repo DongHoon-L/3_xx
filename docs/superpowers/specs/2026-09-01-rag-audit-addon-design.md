@@ -192,7 +192,8 @@ class AuditRecorder:
 - `SR01_PATTERNS`, `SR02_PATTERNS`, `SR03_PATTERNS`, `SR03_SECRET_PATTERNS`, `HARDENED_SYSTEM_PROMPT`는 `ch1/1_5/lab03_threat_modeling_lab.py`의 정의를 그대로 옮긴다.
 - `check_question(q) -> GuardDecision(allowed: bool, findings: list[str])` — `SR-01:<label>`, `SR-02:<label>` 라벨.
 - `sanitize_context(text) -> (sanitized, findings)` — SR-03 명령형 치환 `[REDACTED-BY-SR03]`, 비밀 패턴 `[MASKED]`, `<<<UNTRUSTED_DOCUMENT_BEGIN>>>…<<<UNTRUSTED_DOCUMENT_END>>>` 래핑.
-- `filter_output(answer) -> (filtered, masked: bool)` — `SR03_SECRET_PATTERNS` + `audit_engine.masking.mask_text`(PII) 적용.
+- `filter_output(answer) -> (filtered, masked: bool)` — `SR03_SECRET_PATTERNS`(대소문자 무시) + `audit_engine.masking.mask_text`(PII) 적용.
+- 난독화 대응(최종 리뷰 반영): `strip_invisible`(NFKC + zero-width 제거, 내용 보존)과 `normalize_for_matching`(추가로 소문자화 + `[\W_]+`→공백, 구분자 제거형까지)을 **매칭 전용** 접기로 두고 SR-01/02/03을 원문·접은 형태 양쪽에 대조한다. SR-03 치환 후에도 접은 형태가 명령형에 걸리면 문서 본문 전체를 `[REDACTED-BY-SR03: obfuscated instruction]`으로 대체하고 `SR-03:doc-obfuscated-instruction`을 남긴다(어느 구간이 명령인지 특정할 수 없으므로 fail-closed). 정규식 시연이라는 한계는 그대로다.
 
 ### 5.4 `documents.py` / `retriever.py`
 - `Document(doc_id, text)`; `load_documents(path)`; JSON 배열 `[{"doc_id","text"}]`, `doc_id` 중복 시 오류.
@@ -206,7 +207,7 @@ class AuditRecorder:
 ### 5.6 `agent.py`
 - 도구 허용목록: `list_documents`, `rag_answer`, `direct_answer` (이 밖의 값은 존재하지 않음).
 - `choose_tool(question, retriever) -> (tool, reason)`: ① 질문에 `문서 목록`/`documents`/`목록` 포함 → `list_documents` ② `retriever.search(question, 1)`의 최고 점수 > 0 → `rag_answer` ③ 그 외 `direct_answer`.
-- `run(question, principal) -> AgentTrace(request_id, status, tool, reason, guard_findings, context_findings, doc_ids, contexts_sanitized, answer, llm_model, latency_ms, output_masked, error)`.
+- `run(question) -> AgentTrace(request_id, status, tool, reason, guard_findings, context_findings, doc_ids, contexts_sanitized, answer, llm_model, latency_ms, output_masked, error)`. 에이전트는 `principal`을 받지 않는다 — 행위자는 `api.py`가 감사 훅에 직접 넘긴다(에이전트는 신원을 알 필요가 없다).
   - `status` ∈ `answered | blocked | error`.
   - `rag_answer` 프롬프트: system = `HARDENED_SYSTEM_PROMPT`; user = 정화된 문맥 블록들 + `\n\nQuestion: <question>`. 문맥 없음이면 `(관련 문서 없음)`.
   - `direct_answer`: system = `HARDENED_SYSTEM_PROMPT`, user = question.
@@ -217,9 +218,11 @@ class AuditRecorder:
 ```python
 class AuditHook:
     def __init__(self, recorder: AuditRecorder)
-    def record_query(self, trace: AgentTrace, principal: Principal, source_ip: str) -> None
-    def record_auth_denied(self, source_ip: str, reason: str) -> None
+    def record_query(self, trace: AgentTrace, principal: Principal, source_ip: str) -> ChainEntry
+    def record_auth_denied(self, source_ip: str, reason: str) -> ChainEntry
 ```
+두 메서드는 `recorder.record()`가 돌려준 `ChainEntry`를 그대로 반환한다. `api.py`는 이 엔트리의 `seq`/`entry_hash`를 앱 로그 한 줄에 `audit_seq=`/`audit_hash=`로 남긴다 — §4.2의 외부 앵커(`verify --expect-tail`)가 실제로 존재하려면 소비자가 꼬리를 어딘가에 적어야 하기 때문이다.
+
 이벤트 매핑:
 
 | 필드 | `record_query` | `record_auth_denied` |
@@ -232,8 +235,10 @@ class AuditHook:
 | source_ip | client host | client host |
 | purpose | question[:200] | `"-"` (빈 값 방지) |
 | result | `answered` / `blocked:<findings>` / `error:<kind>` | `denied:<reason>` |
-| details | tool, reason, doc_ids(`,`결합), guard_findings, context_findings, llm_model, latency_ms, answer_sha256, output_masked | reason |
+| details | tool, reason, doc_ids(`,`결합), guard_findings, context_findings, llm_model, latency_ms, answer_digest_b64url, output_masked | reason |
 | sensitive | `{question, answer, contexts}` | 없음 |
+
+`answer_digest_b64url`은 답변 SHA-256을 **패딩 없는 base64url**로 담는다. 16진수 다이제스트는 64자 숫자·문자열이라 그 안의 16자리 숫자 연속이 `mask_record`의 카드번호 패턴에 걸려 잘리는 일이 있는데(다이제스트는 PII가 아니라 잡음일 뿐이다), base64url은 그 오탐을 사실상 없앤다.
 
 ### 5.8 `api.py` (FastAPI)
 
@@ -248,14 +253,17 @@ class AuditHook:
 
 | 상황 | 코드 | 감사 |
 |---|---|---|
+| `Content-Length` > 64KiB, 또는 길이를 알 수 없는 본문(chunked·형식 오류) | **413 `body too large`** | 없음 — 인증 이전, 본문을 읽기 전에 미들웨어가 거부한다 |
 | 토큰 없음/불일치 | 401 | `auth_denied` |
+| body 필드 검증 실패 (`question` 없음/타입 오류) | 422 | 없음 — 인증이 **의존성**이라 미인증 요청은 422 대신 401을 받는다 |
 | 질문 비어있음/길이 초과 | 400 | 없음 (인증 후 검증) |
 | 가드 차단 | 403 | `agent_query_blocked` |
 | LLM 오류 | 502 | `agent_query` result=`error:*` |
+| `agent.run`의 예상치 못한 예외 | 500 (예외 문구 미노출) | `agent_query` result=`error:internal` — 최소 trace를 만들어 기록한 뒤 재던진다 |
 | recorder 예외 (`AuditError`) | **503 `audit_unavailable`** — 답변 폐기 | — |
 | 기동 시 `AuditConfigError`/`Settings` 오류 | 프로세스 시작 실패 | — |
 
-앱 로그(`logging`, stdout)는 `request_id, actor, action, result, latency_ms`만 남기고 질문/답변/토큰/비밀값은 남기지 않는다.
+앱 로그(`logging`, stdout)는 `request_id, actor, action, result, latency_ms`와 감사 앵커(`audit_seq`, `audit_hash`)만 남기고 질문/답변/토큰/비밀값은 남기지 않는다. `actor`는 평문이므로 로그는 가명 매핑과 동급으로 보호한다.
 
 ### 5.9 문서 코퍼스 `data/documents.json` (전부 합성, 실제 비밀 없음)
 
@@ -272,7 +280,7 @@ class AuditHook:
 
 | 자산 | 공격자 | 진입점 | 영향 | 통제 |
 |---|---|---|---|---|
-| 답변 서비스 | 미인증 클라이언트 | `/agent` | 무단 사용, 감사 오염 | Bearer 허용목록, 401, `auth_denied` 기록 |
+| 답변 서비스 | 미인증 클라이언트 | `/agent` | 무단 사용, 감사 오염 | Bearer 허용목록, 401, `auth_denied` 기록, 본문 64KiB 상한(413). **잔여 위험**: 익명 요청 1건마다 `auth_denied` 1건이 append+fsync되므로(체인 증가, `verify` O(n)) 레이트 리미터가 없는 현 구성은 랩 한정이다 — 프로덕션은 노출 전에 IP별 실패 예산이나 리버스 프록시 레이트 리밋을 앞에 둔다 |
 | 시스템 프롬프트/비밀 | 인증 사용자 | 질문(직접 인젝션) | 비밀 유출 | SR-01/02 → 403 + 기록 |
 | 시스템 프롬프트/비밀 | 문서 오염자 | 코퍼스 문서(간접 인젝션) | 모델 지시 탈취 | SR-03 정화 + 강화 시스템 프롬프트 + 기록 |
 | 비밀/PII | 모델 출력 | 답변 | 유출 | 출력 필터, 모델 출력은 텍스트로만 취급 |

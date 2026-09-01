@@ -238,7 +238,17 @@
 ### [P2-T10] README / .env.example / 통합 스모크
 - README(설치·실행·curl·CLI·상태코드 표·보안 메모), `.env.example`(값 비움, 생성 명령 주석). 감사 CLI/보안 메모 절에 `audit-engine/README.md` 인계 사항(체인/볼트당 서비스 1프로세스, CLI는 파일 잠금 덕에 서비스와 동시 실행 안전, `record()`는 fsync에서 블로킹, `shred`/`unseal`의 대상별 이벤트, `verify --expect-tail`, `report`의 `orphan_keys`/`unaudited_shred`)를 병합.
 - 통합 스모크는 **MOCK 모드**로 실행(WSL 27B 모델 서버 기동은 GPU 로딩에 수 분이 걸리는 사용자 몫이라 이번 세션에서 띄우지 않음; README §실행 1번과 WSL 관련 단계는 사용자가 별도로 검증). 실제 `uvicorn` 프로세스(포트 8765, `LLM_PROVIDER=mock`)로 나머지 전 경로(인증→가드→검색→감사→봉인→파기)를 실제 CLI/HTTP로 실행:
-  - `/health` 200. README curl 4종: 200(날씨 답변)/403(SR-01·SR-02 직접 인젝션 차단)/200(오염 문서 `poisoned` → 답변에 비밀 无유출, SR-03 정화 확인)/401(`missing_token`).
+  - `/health` 200. README curl 4종: 200(날씨 답변)/403(SR-01·SR-02 직접 인젝션 차단)/200(오염 문서 `poisoned` → 답변에 비밀 무유출, SR-03 정화 확인)/401(`missing_token`).
   - `verify` exit 0 (`entries_checked=4`) → `report` `entries=4`, `residual_plaintext_pii=0`, `orphan_keys=0`, `unaudited_shred=0`, `anomalies=[]`. `chain.jsonl`에 `alice` 평문 없음(`grep -c alice` → 0).
   - 정상 질의(날씨, `record_id=8a16e1b2-...`) `unseal` → 원문(질문/답변/정화된 문맥) 복원 성공(exit 0) → `shred --record-id` → `{"shredded": ["8a16e1b2-..."]}`(exit 0) → 재`unseal` → `KeyNotFoundError`로 거부(exit 1) → `verify` 여전히 exit 0(`entries_checked=9`, 암호문은 남고 키만 소멸) → `report` `anomalies=[]` 유지(`shredded_count=1`).
 - rag-agent 계획(Plan 2) 완료. 전체 테스트: `PY -m pytest` → **223 passed**(audit-engine 125 + rag-agent 98; `test_api.py` 12건 포함), 1 warning(업스트림 `StarletteDeprecationWarning: httpx→httpx2`, 코드 결함 아님 — 상세는 batch-C-report.md 참고).
+
+### [P2 최종 리뷰 수정] rag-agent
+전 브랜치 리뷰의 FIX 항목 일괄 반영(`audit-engine/`은 손대지 않음). 커밋 3건: 가드 정규화 / api 하드닝 / 문서·경고 정리.
+- **I1 인증이 body 검증보다 먼저**: `ask`가 `principal: Principal = Depends(require_principal)` + `body: AgentRequest = Body(...)` 서명으로 바뀌어, 미인증 + 잘못된 body는 422가 아니라 **감사되는 401**을 받는다. 추가로 `@app.middleware("http")`가 `POST /agent`의 `Content-Length > 64KiB`(및 chunked·형식 오류 = 크기를 알 수 없는 본문)를 **본문을 읽기 전에** 413 `body too large`로 거부한다 — 인증 전이라 감사 이벤트는 남기지 않는다(README/스펙에 명시).
+- **I2 `auth_denied` 무제한 append**: 레이트 리밋은 비범위 → **랩 한정 위험으로 수용하고 문서화**(README §보안 메모, 스펙 §6 "답변 서비스" 행). 코드 변경 없음.
+- **I3 외부 앵커가 로그에 없던 문제**: `record_query`/`record_auth_denied`가 돌려주는 `ChainEntry`를 받아 `agent_query`·`auth_denied` 로그 줄에 `audit_seq=`/`audit_hash=`를 남긴다 → `verify --expect-tail`의 앵커가 실제로 존재한다.
+- **I4 예상치 못한 예외가 무감사**: `agent.run`을 `try/except Exception`으로 감싸 최소 trace(`status=error`, `reason/error=internal`)를 기록하고 예외 클래스명만 로그에 남긴 뒤 재던진다(500, 본문에 예외 문구 없음).
+- **I5 가드 우회**: `strip_invisible`(NFKC + zero-width 제거, 내용 보존)·`normalize_for_matching`(+ 소문자·`[\W_]+`→공백·구분자 제거형)을 매칭 전용 접기로 도입. SR-01/02는 원문·접은 형태 양쪽에 대조하고, SR-03은 치환 후에도 접은 형태가 명령형에 걸리면 문서 본문을 통째로 `[REDACTED-BY-SR03: obfuscated instruction]`으로 버린다. `filter_output`/비밀 패턴은 대소문자 무시. `MockLLM`도 접은 형태로 유출 트리거를 판정한다(카나리아). 한계(정규식 시연, abliterated 모델에 대한 완전 방어 아님)는 README에 명시.
+- **소소한 것들**: `answer_sha256` → `answer_digest_b64url`(16진수 다이제스트가 카드번호 패턴에 걸려 잘리는 오탐 회피), `Bearer` 스킴 대소문자 무시, 엔드포인트가 의도적으로 sync `def`라는 주석, `conftest`가 문서화된 선택 env를 전부 기본값으로 고정(개발자 `.env` 누수 차단), `pytest.raises(AuditConfigError)`, 503 경로가 blocked/error 본문도 감추는지 검증, `pytest.ini`의 `filterwarnings`로 업스트림 starlette 경고 억제.
+- 테스트: `PY -m pytest` → **257 passed, 0 warnings**(audit-engine 125 + rag-agent 132; `test_api.py` 23건). 수동 확인(TestClient): 미인증+잘못된 body 401 / 인증+잘못된 body 422 / 70000B 본문 413(체인 무기록) / 소문자 `bearer` 200 / `S Y S T E M   O V E R R I D E` 질문 403.
