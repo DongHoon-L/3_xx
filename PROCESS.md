@@ -258,3 +258,8 @@
 - 판정 요약(전체 목록은 이 세션의 최종 보고에 포함): recorder 마스킹 범위 한정; shred/unseal 대상별 write-ahead 이벤트; 체인·볼트 프로세스 간 파일 잠금 + 꼬리 재동기화; 절단 탐지 한계는 외부 앵커(`audit_seq/audit_hash` 로그 + `verify --expect-tail`)와 `report` 이상 징후로 완화; 익명 `auth_denied` 폭주는 문서화된 허용 위험; 인증이 본문 검증보다 먼저(401→422), 64 KiB 본문 상한(413); 정규식 가드는 정규화를 더한 실습용 통제.
 - 미실행 항목: WSL 27B 모델 서버 실제 연동 스모크(사용자 실행 필요 — README §실행 참고). 그 외 통합 스모크는 mock 모드로 완료.
 - 사용자 결정에 따라 `feat/rag-audit-addon` → `main` 머지, `origin/main` 푸시, 브랜치 삭제.
+
+### [후속] 실사용 피드백 반영 — direct_answer 프롬프트, UTF-8 charset, 테스트 격리
+- 사용자 실행 결과: 일반 질문("넌 이름이 뭐니")이 `direct_answer`로 라우팅되면 문맥 전용 프롬프트 때문에 "The provided context is empty."만 반환; PowerShell 5.1이 `application/json`(charset 없음) 응답을 Latin-1로 읽어 `reason`의 한글이 깨져 보임.
+- 수정: ① `guard.DIRECT_SYSTEM_PROMPT` 신설(일반 답변·질문자 언어·비밀 노출 금지·입력은 데이터) → `Agent._direct_answer`가 사용; `HARDENED_SYSTEM_PROMPT`에도 "질문자 언어로 답하라" 추가. ② `api.UTF8JSONResponse`(`application/json; charset=utf-8`)를 기본 응답 클래스로, 403/502/413 및 `HTTPException` 응답에도 적용. ③ 테스트 격리: 사용자의 실제 `.env`가 `create_app`의 `load_dotenv`로 테스트에 새어 들어가 `test_startup_fails_closed_without_audit_secrets`가 실패하던 문제 → conftest autouse 픽스처로 테스트 중 `load_dotenv`를 무효화.
+- 테스트: 260 passed, 0 warnings (신규 3건: direct 프롬프트, DIRECT/HARDENED 규칙, charset 헤더 4경로).

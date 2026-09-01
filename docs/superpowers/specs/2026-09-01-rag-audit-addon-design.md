@@ -210,7 +210,7 @@ class AuditRecorder:
 - `run(question) -> AgentTrace(request_id, status, tool, reason, guard_findings, context_findings, doc_ids, contexts_sanitized, answer, llm_model, latency_ms, output_masked, error)`. 에이전트는 `principal`을 받지 않는다 — 행위자는 `api.py`가 감사 훅에 직접 넘긴다(에이전트는 신원을 알 필요가 없다).
   - `status` ∈ `answered | blocked | error`.
   - `rag_answer` 프롬프트: system = `HARDENED_SYSTEM_PROMPT`; user = 정화된 문맥 블록들 + `\n\nQuestion: <question>`. 문맥 없음이면 `(관련 문서 없음)`.
-  - `direct_answer`: system = `HARDENED_SYSTEM_PROMPT`, user = question.
+  - `direct_answer`: system = `DIRECT_SYSTEM_PROMPT`(일반 답변 허용, 질문자 언어로 답변, 비밀 노출 금지·입력은 데이터 규칙 유지), user = question. (2026-09-01 실사용 피드백으로 변경: 문맥 전용 프롬프트를 쓰면 일반 질문에 "문맥이 비어 있다"고만 답함)
   - `list_documents`: LLM 미호출, `answer` = doc_id 목록 문자열.
   - 모든 경로에서 `filter_output` 적용.
 

@@ -25,6 +25,12 @@ log = logging.getLogger("rag_agent")
 MAX_BODY_BYTES = 64 * 1024
 
 
+class UTF8JSONResponse(JSONResponse):
+    """JSON with an explicit charset so clients that default to Latin-1 (PowerShell 5.1) decode Korean."""
+
+    media_type = "application/json; charset=utf-8"
+
+
 class AgentRequest(BaseModel):
     question: str
 
@@ -41,7 +47,12 @@ def create_app(
     agent = Agent(retriever, llm or build_llm_client(settings), settings.top_k)
     hook = AuditHook(recorder)
 
-    app = FastAPI(title="RAG Agent (audited)", version="0.1.0")
+    app = FastAPI(title="RAG Agent (audited)", version="0.1.0", default_response_class=UTF8JSONResponse)
+
+    @app.exception_handler(HTTPException)
+    async def http_exception_as_utf8_json(request: Request, exc: HTTPException):
+        return UTF8JSONResponse(status_code=exc.status_code, content={"detail": exc.detail},
+                                headers=getattr(exc, "headers", None))
 
     @app.middleware("http")
     async def limit_agent_body(request: Request, call_next):
@@ -53,7 +64,7 @@ def create_app(
             chunked = "chunked" in request.headers.get("transfer-encoding", "").lower()
             oversized = declared is not None and (not declared.isdigit() or int(declared) > MAX_BODY_BYTES)
             if chunked or oversized:
-                return JSONResponse(status_code=413, content={"detail": "body too large"})
+                return UTF8JSONResponse(status_code=413, content={"detail": "body too large"})
         return await call_next(request)
 
     def client_ip(request: Request) -> str:
@@ -122,10 +133,10 @@ def create_app(
                  entry.seq, entry.entry_hash)
 
         if trace.status == "blocked":
-            return JSONResponse(status_code=403, content={
+            return UTF8JSONResponse(status_code=403, content={
                 "request_id": trace.request_id, "status": "blocked", "findings": list(trace.guard_findings)})
         if trace.status == "error":
-            return JSONResponse(status_code=502, content={
+            return UTF8JSONResponse(status_code=502, content={
                 "request_id": trace.request_id, "status": "error", "error": trace.error})
         return {"request_id": trace.request_id, "status": "answered", "tool": trace.tool,
                 "reason": trace.reason, "answer": trace.answer}

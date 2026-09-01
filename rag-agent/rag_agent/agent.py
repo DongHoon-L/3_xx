@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass
 from uuid import uuid4
 
-from .guard import HARDENED_SYSTEM_PROMPT, check_question, filter_output, sanitize_context
+from .guard import DIRECT_SYSTEM_PROMPT, HARDENED_SYSTEM_PROMPT, check_question, filter_output, sanitize_context
 from .llm import LLMClient, LLMError
 from .retriever import Retriever
 
@@ -102,5 +102,5 @@ class Agent:
         return result.text, result.model, tuple(ids), tuple(blocks), tuple(findings)
 
     def _direct_answer(self, question: str):
-        result = self._llm.chat(HARDENED_SYSTEM_PROMPT, question)
+        result = self._llm.chat(DIRECT_SYSTEM_PROMPT, question)
         return result.text, result.model, (), (), ()

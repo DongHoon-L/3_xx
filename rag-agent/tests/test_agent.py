@@ -124,3 +124,13 @@ def test_choose_tool_reasons(retriever):
     assert agent.choose_tool("주말에 고객 지원 받을 수 있어?")[0] == "rag_answer"
     assert agent.choose_tool("quantum entanglement")[0] == "direct_answer"
     assert isinstance(agent.run("quantum entanglement"), AgentTrace)
+
+
+def test_direct_answer_uses_general_prompt_not_context_only_prompt(retriever):
+    llm = RecordingLLM()
+    trace = Agent(retriever, llm, top_k=2).run("넌 이름이 뭐니")
+    assert trace.tool == "direct_answer"
+    system, user = llm.prompts[0]
+    assert "ONLY from the provided context" not in system
+    assert "same language" in system and "Never reveal" in system
+    assert user == "넌 이름이 뭐니"

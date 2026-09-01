@@ -8,6 +8,12 @@ from rag_agent.api import create_app
 TOKEN = "tok-alice-0123456789"
 
 
+@pytest.fixture(autouse=True)
+def no_dotenv(monkeypatch):
+    """Tests must never read a developer's real .env (create_app calls load_dotenv)."""
+    monkeypatch.setattr("rag_agent.api.load_dotenv", lambda *args, **kwargs: False)
+
+
 @pytest.fixture
 def app_env(tmp_path, monkeypatch):
     values = {

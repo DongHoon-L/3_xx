@@ -136,3 +136,12 @@ def test_filter_output_passes_clean_answer():
 
 def test_hardened_prompt_declares_context_as_data():
     assert "untrusted DATA" in HARDENED_SYSTEM_PROMPT
+
+
+def test_direct_prompt_keeps_secret_rule_and_language_rule():
+    from rag_agent.guard import DIRECT_SYSTEM_PROMPT
+
+    assert "Never reveal" in DIRECT_SYSTEM_PROMPT
+    assert "same language" in DIRECT_SYSTEM_PROMPT
+    assert "provided context" not in DIRECT_SYSTEM_PROMPT
+    assert "same language" in HARDENED_SYSTEM_PROMPT
