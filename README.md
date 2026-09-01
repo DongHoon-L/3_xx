@@ -73,9 +73,12 @@ copy .env.example .env
 
 ## 실행
 ```powershell
-# 1) WSL 모델 서버 (별도 터미널, 처음엔 모델 로딩에 시간이 걸림)
-wsl.exe -- ~/.llama-app/llama serve -hf huihui-ai/Huihui-Qwen3.8-27B-abliterated-GGUF:Q4_K_XL --port 8080
-curl http://localhost:8080/health          # {"status":"ok"} 이면 준비됨. 안 되면 --host 0.0.0.0 으로 재기동 후 LLM_BASE_URL 을 WSL IP 로.
+# 1) WSL 모델 서버 — 관리 스크립트 사용 (최초 1회 설치)
+wsl.exe -- bash -c "cp /mnt/c/Users/shapd/Documents/prism/ch3/3_xx/scripts/wsl-chatbot.sh ~/chatbot.sh && sed -i 's/$//' ~/chatbot.sh && chmod +x ~/chatbot.sh"
+wsl.exe -- ~/chatbot.sh start              # 백그라운드 기동, 모델 로딩(수 분) 후 'ready' 출력
+wsl.exe -- ~/chatbot.sh status             # 상태 / stop: 종료 / logs: 로그 / run: 전경 실행(Ctrl+C 종료)
+# 브라우저 채팅 UI: http://localhost:8080   API: http://localhost:8080/v1 (모델 이름 alias: local)
+# 환경변수로 조정: CHATBOT_PORT, CHATBOT_CTX(기본 8192), CHATBOT_MODEL, CHATBOT_HOST(기본 0.0.0.0)
 
 # 2) 에이전트
 ..\..\prism\Scripts\python.exe -m uvicorn rag_agent.api:create_app --factory --port 8000

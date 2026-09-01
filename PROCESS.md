@@ -270,3 +270,7 @@
 
 ### [후속] README에 "연동 방식" 절 추가
 - 감사 엔진 Add-on 연동 구조를 설명용으로 정리해 README에 추가: 한 방향 의존·단일 접점(`audit_hook.py`), 요청 1건의 5단계 흐름과 실패 시 상태코드/감사 이벤트 표, `record()` 내부 5단계, CLI 요약, 신뢰 경계 표, 알려진 한계.
+
+### [후속] WSL 로컬 챗봇 서버 관리 스크립트
+- `scripts/wsl-chatbot.sh` 작성 → WSL `~/chatbot.sh`로 설치. `start`(setsid+nohup 백그라운드, `/health` 준비까지 대기)·`stop`·`status`·`logs`·`run`. 기본: 모델 `Huihui-Qwen3.8-27B-abliterated-GGUF:Q4_K_XL`, `--host 0.0.0.0 --port 8080 -c 8192 --alias local`.
+- 검증: Windows에서 `http://localhost:8080/health` OK, GPU 22.6/24.4 GB 적재, `/v1/chat/completions` 한국어 응답 확인(요청 JSON은 UTF-8 파일로 전송 — Git Bash `-d` 인자의 한글은 cp949로 깨짐). llama-server 내장 웹 채팅 UI는 `http://localhost:8080`.
