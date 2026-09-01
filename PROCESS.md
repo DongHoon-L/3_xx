@@ -120,3 +120,16 @@
 - 셀프 리뷰: placeholder 없음; recorder 순서·CLI·훅 매핑 상호 일치 확인; 누락됐던 문서 코퍼스(§5.9)와 `.env.example` 규칙 추가.
 - 도구 메모: 약 20KB heredoc을 Bash로 쓰면 명령이 잘려 실패함 → 큰 파일은 Write 도구 사용.
 - 다음: 스펙 커밋 → 사용자 검토 → `superpowers:writing-plans`.
+
+### [14] 스펙 승인
+- 커밋 `3b86ec7` (feat/rag-audit-addon): 스펙 + PROCESS.md.
+- 사용자: 스펙 검토 후 **승인 — 구현 계획 작성**. brainstorming 종료.
+- 다음: `superpowers:writing-plans`로 단계별 구현 계획 작성 (TDD 순서로).
+
+### [15] 구현 계획 작성 (writing-plans)
+- 스펙이 독립 서브시스템 2개를 다루므로 계획을 2개로 분리:
+  - `docs/superpowers/plans/2026-09-01-audit-engine.md` — 9개 태스크 (스캐폴딩 → schema → chain → crypto → masking/deidentification → retention → config → recorder → cli), 예상 85 tests.
+  - `docs/superpowers/plans/2026-09-01-rag-agent.md` — 10개 태스크 (스캐폴딩/코퍼스 → auth → guard → retriever → llm → config → agent → audit_hook → api → README/.env.example/스모크), 예상 99 tests.
+- 각 태스크: 실패 테스트 → 확인 → 구현 → 통과 → PROCESS.md 기록 + 커밋 (TDD). 전체 코드가 계획에 포함됨.
+- 셀프 리뷰: 스펙 §4~§8 전 항목 태스크 매핑 확인; 누적 테스트 수 오기 수정; `test_api.py`의 conftest 모듈 import(importlib 모드 불가) 제거; 스펙 대비 의도된 차이 3건(`errors.py`/`AuditStorageError`, 코퍼스 패키지 내 배치, `--factory` 실행, `AgentTrace.question`)을 각 계획 Global Constraints에 명시.
+- 다음: 사용자에게 실행 방식(subagent-driven vs inline) 확인 후 Plan 1부터 실행.
