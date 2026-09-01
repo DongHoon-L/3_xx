@@ -187,3 +187,7 @@
 ### [P2-T1] rag-agent 스캐폴딩 + 코퍼스
 - `rag-agent/pyproject.toml`(deps: fastapi, uvicorn, requests, python-dotenv, audit-engine), 합성 코퍼스 4건(weather/policy/api_guide(가짜 키)/poisoned(간접 인젝션)), `documents.py`(검증 로더). editable 설치.
 - 테스트: `test_documents.py` 6 passed.
+
+### [P2-T2] auth.py
+- `RAG_API_KEYS="token:actor:role,..."` 파서(형식·중복·빈 목록 거부), `authenticate`(Bearer, `hmac.compare_digest` 전수 비교, `missing_token`/`invalid_token`).
+- 테스트: `test_auth.py` 14 passed.
