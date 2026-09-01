@@ -147,3 +147,7 @@
 ### [P1-T2] schema.py
 - `AuditEvent`(10필드 + `details`), `validate()`(필수값·UTC Z 타임스탬프·details 문자열 맵), `utc_now`, `parse_timestamp`.
 - 테스트: `test_schema.py` 13 passed.
+
+### [P1-T3] chain.py
+- 증분 JSONL 해시체인: `append`(lock+fsync), `verify`(실패 seq/사유: previous_hash_mismatch·entry_hash_mismatch·seq_gap·malformed_line), `open`(손상 시 ChainCorruptError), OSError→AuditStorageError.
+- 테스트: `test_chain.py` 11 passed (변조 4종 포함).
