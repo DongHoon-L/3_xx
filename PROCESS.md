@@ -133,3 +133,9 @@
 - 각 태스크: 실패 테스트 → 확인 → 구현 → 통과 → PROCESS.md 기록 + 커밋 (TDD). 전체 코드가 계획에 포함됨.
 - 셀프 리뷰: 스펙 §4~§8 전 항목 태스크 매핑 확인; 누적 테스트 수 오기 수정; `test_api.py`의 conftest 모듈 import(importlib 모드 불가) 제거; 스펙 대비 의도된 차이 3건(`errors.py`/`AuditStorageError`, 코퍼스 패키지 내 배치, `--factory` 실행, `AgentTrace.question`)을 각 계획 Global Constraints에 명시.
 - 다음: 사용자에게 실행 방식(subagent-driven vs inline) 확인 후 Plan 1부터 실행.
+
+### [16] 실행 준비 — 커밋 저자 정책, 계획 결함 수정, SDD 시작
+- 사용자 지시: "1번(subagent-driven)으로 중단 없이 끝까지 구현, 커밋은 나만 contributor로". → 모든 커밋에서 `Co-Authored-By` 제거. 이미 만든 로컬 커밋 2개(미푸시)를 `git commit-tree`로 동일 트리·새 메시지로 재작성(`3cfe2a4` 스펙, `71d62de` 계획). 두 계획의 Global Constraints도 동일하게 수정.
+- 사전 충돌 점검에서 계획 결함 1건 발견·수정: recorder가 record 전체에 `mask_record`를 적용하면 카드번호 정규식이 UUID `record_id`/hex 해시의 숫자 연속을 오탐할 수 있음(예: `11111111-2222-3333-4444-…` → `[CARD_MASKED]`, AAD/볼트 조회 파괴). → 마스킹을 `purpose`/`details`(자유 텍스트)로 한정하는 `protect_record`, 잔여 PII 검사 `residual_pii_count` 추가. 테스트도 체인 파일 전체 스캔 대신 record 자유 텍스트 필드 검사로 변경(hex 해시 오탐으로 인한 간헐 실패 방지). 스펙 §4.8의 "mask_record(event.to_dict())" 문구와의 차이는 의도된 것.
+- SDD 워크스페이스: `.superpowers/sdd/2026-09-01-audit-engine/` (git-ignored). 원장 `progress.md`에 사전 점검표·판정 기록.
+- 모델 선택: 구현자 haiku(계획에 전체 코드 포함 → 전사+테스트), 리뷰어 sonnet, 최종 전체 리뷰 fable.

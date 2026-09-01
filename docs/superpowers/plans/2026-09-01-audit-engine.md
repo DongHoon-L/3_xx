@@ -22,9 +22,8 @@
 - 정규 JSON은 정확히 `json.dumps(obj, ensure_ascii=False, sort_keys=True, separators=(",", ":"))` → UTF-8.
 - 해시 알고리즘 허용목록: `sha256`(기본), `sha512`, `sha3_256`. 제네시스 previous_hash: `"GENESIS"`.
 - **매 태스크의 커밋에는 `PROCESS.md` 갱신을 포함한다** (섹션 `### [P1-TN] <태스크명>`: 한 일 / 테스트 결과 / 특이사항).
-- 커밋 메시지 끝에는 다음 두 줄을 그대로 붙인다:
+- 커밋은 **사용자 단독 저자**로 남긴다: `Co-Authored-By` 트레일러를 절대 넣지 않는다 (사용자 요청). 커밋 메시지 끝에는 다음 한 줄만 붙인다:
   ```
-  Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01Uk8js6oJDEnhN2SJkDjzau
   ```
 - 스펙 대비 의도된 차이(구현 편의): 예외 클래스는 `audit_engine/errors.py` 한 파일에 모은다(순환 import 방지). 파일 I/O 실패를 감싸는 `AuditStorageError`를 추가한다(rag-agent가 503으로 매핑할 수 있도록 `OSError`를 `AuditError`로 변환).
@@ -1595,6 +1594,7 @@ git commit -m "feat(audit-engine): add fail-closed environment configuration"
 - Consumes: `config.AuditConfig`, `chain.{HashChain, ChainEntry, canonical_json}`, `crypto.{KeyVault, generate_key, seal, unseal}`, `deidentification.pseudonymize_value`, `masking.mask_record`, `retention.RetentionPolicy`, `schema.AuditEvent`, `errors.*`
 - Produces:
   - `AuditRecorder(config)`; `AuditRecorder.from_env(env=None)`; `.record(event, sensitive=None) -> ChainEntry`; `.unseal(entry) -> dict`; 속성 `.chain: HashChain`, `.vault: KeyVault`, `.policy: RetentionPolicy`, `.config: AuditConfig`
+  - `recorder.FREE_TEXT_FIELDS = ("purpose", "details")`; `recorder.protect_record(event, pseudonym_secret) -> dict` (actor 가명화 + 자유 텍스트 필드만 마스킹); `recorder.residual_pii_count(record: dict) -> int` (CLI report와 테스트가 사용)
   - `audit_engine` 패키지 공개 API: `AuditEvent, utc_now, AuditRecorder, AuditConfig, HashChain, ChainEntry, ChainVerification, KeyVault, RetentionPolicy, mask_text, mask_record, pseudonymize_value, AuditError` 및 모든 예외
 
 - [ ] **Step 1: 실패하는 테스트 작성**
@@ -1610,7 +1610,7 @@ from audit_engine import AuditEvent, AuditRecorder
 from audit_engine.config import AuditConfig
 from audit_engine.crypto import KeyVault
 from audit_engine.errors import AuditError, AuditStorageError, AuditValidationError, KeyNotFoundError, SealIntegrityError
-from audit_engine.masking import mask_text
+from audit_engine.recorder import residual_pii_count
 
 KEK = b"\x09" * 32
 SECRET = "recorder-test-secret-000"
@@ -1651,8 +1651,18 @@ def test_record_protects_actor_and_pii_in_chain(recorder, tmp_path):
     assert entry.record["details"] == {"tool": "rag_answer"}
     raw = (tmp_path / "chain.jsonl").read_text(encoding="utf-8")
     assert "alice" not in raw and "example.com" not in raw
-    assert mask_text(raw)[1] == []  # no residual plaintext PII anywhere in the chain file
+    assert residual_pii_count(entry.record) == 0
+    assert entry.record["record_id"] == "req-1" and entry.record["timestamp"] == "2026-09-01T03:00:00Z"
     assert entry.retention["retention_days"] == 365 and entry.retention["retention_until"] == "2027-09-01"
+
+
+def test_identifiers_are_never_masked(recorder):
+    # A UUID-shaped record_id contains digit groups that the card regex would otherwise eat.
+    uuid_like = "11111111-2222-3333-4444-555555555555"
+    entry = recorder.record(make_event(record_id=uuid_like, purpose="card 4111-1111-1111-1111"), sensitive={"q": "x"})
+    assert entry.record["record_id"] == uuid_like
+    assert entry.record["purpose"] == "card [CARD_MASKED]"
+    assert recorder.unseal(entry) == {"q": "x"}
 
 
 def test_sensitive_payload_is_sealed_and_recoverable(recorder):
@@ -1740,6 +1750,26 @@ from .masking import mask_record
 from .retention import RetentionPolicy
 from .schema import AuditEvent
 
+FREE_TEXT_FIELDS = ("purpose", "details")
+
+
+def protect_record(event: AuditEvent, pseudonym_secret: bytes) -> dict:
+    """Pseudonymize the actor and mask PII in free-text fields only.
+
+    Identifiers, timestamps and controlled-vocabulary fields are left intact: masking them
+    would let the card/RRN regexes corrupt UUID record_ids (breaking AAD/vault lookup) and hashes.
+    """
+    protected = event.to_dict()
+    protected["actor"] = pseudonymize_value(event.actor, pseudonym_secret)
+    for name in FREE_TEXT_FIELDS:
+        protected[name], _findings = mask_record(protected[name])
+    return protected
+
+
+def residual_pii_count(record: dict) -> int:
+    """How many PII patterns still match in a stored record's free-text fields (must be 0)."""
+    return sum(len(mask_record(record.get(name, ""))[1]) for name in FREE_TEXT_FIELDS)
+
 
 class AuditRecorder:
     def __init__(self, config: AuditConfig) -> None:
@@ -1771,9 +1801,7 @@ class AuditRecorder:
     def record(self, event: AuditEvent, sensitive: dict[str, Any] | None = None) -> ChainEntry:
         """Append one protected event. Raises AuditError subclasses; never swallows failures."""
         event.validate()
-        protected = event.to_dict()
-        protected["actor"] = pseudonymize_value(event.actor, self._config.pseudonym_secret)
-        protected, _findings = mask_record(protected)
+        protected = protect_record(event, self._config.pseudonym_secret)
 
         sealed = None
         if sensitive is not None:
@@ -1836,7 +1864,7 @@ __all__ = [
 - [ ] **Step 4: 테스트 통과 확인 (전체)**
 
 Run: `PY -m pytest audit-engine`
-Expected: 모든 테스트 통과 (`test_recorder.py` 10 passed 포함, 누적 76 passed)
+Expected: 모든 테스트 통과 (`test_recorder.py` 11 passed 포함, 누적 77 passed)
 
 - [ ] **Step 5: PROCESS.md 기록 + 커밋**
 
@@ -1844,9 +1872,9 @@ Expected: 모든 테스트 통과 (`test_recorder.py` 10 passed 포함, 누적 7
 ```markdown
 
 ### [P1-T8] recorder.py + 공개 API
-- `AuditRecorder.record`: validate → actor 가명화 → mask_record → sensitive 봉인(중복 record_id 거부) → 보존 → chain.append. `unseal`로 조사용 복호화. 체인 파일 재스캔 시 잔여 PII 0 확인.
+- `AuditRecorder.record`: validate → `protect_record`(actor 가명화 + purpose/details만 마스킹; 식별자·타임스탬프는 보존) → sensitive 봉인(중복 record_id 거부) → 보존 → chain.append. `unseal`로 조사용 복호화. `residual_pii_count`로 자유 텍스트 잔여 PII 0 확인.
 - `__init__.py` 공개 API 정리.
-- 테스트: audit-engine 전체 76 passed.
+- 테스트: audit-engine 전체 77 passed.
 ```
 
 ```bash
@@ -1863,7 +1891,7 @@ git commit -m "feat(audit-engine): add AuditRecorder facade and public API"
 - Test: `audit-engine/tests/test_cli.py`
 
 **Interfaces:**
-- Consumes: `recorder.AuditRecorder`, `chain.HashChain`, `crypto.{generate_key, vault_record_ids}`, `retention.RetentionPolicy`, `masking.mask_record`, `schema.{AuditEvent, utc_now}`, `config.{DEFAULT_CHAIN_PATH, DEFAULT_VAULT_PATH}`, `errors.*`
+- Consumes: `recorder.{AuditRecorder, residual_pii_count}`, `chain.HashChain`, `crypto.{generate_key, vault_record_ids}`, `retention.RetentionPolicy`, `schema.{AuditEvent, utc_now}`, `config.{DEFAULT_CHAIN_PATH, DEFAULT_VAULT_PATH}`, `errors.*`
 - Produces:
   - `cli.main(argv: list[str] | None = None) -> int`
   - `cli.build_report(chain: HashChain, vault_path: Path, today: date) -> dict` (report 명령이 쓰는 순수 함수; rag-agent 계획에서는 사용하지 않음)
@@ -2028,8 +2056,7 @@ from .chain import HASH_ALGORITHMS, HashChain
 from .config import DEFAULT_CHAIN_PATH, DEFAULT_VAULT_PATH
 from .crypto import generate_key, vault_record_ids
 from .errors import AuditConfigError, AuditError, KeyNotFoundError, SealIntegrityError
-from .masking import mask_record
-from .recorder import AuditRecorder
+from .recorder import AuditRecorder, residual_pii_count
 from .retention import RetentionPolicy
 from .schema import AuditEvent, utc_now
 
@@ -2068,7 +2095,7 @@ def build_report(chain: HashChain, vault_path: Path, today: date) -> dict:
     vault_ids = vault_record_ids(vault_path)
     sealed = [e for e in entries if e.sealed is not None]
     expired = [e.record["record_id"] for e in entries if RetentionPolicy.is_expired(e.retention, today)]
-    residual = sum(len(mask_record(e.record)[1]) for e in entries)
+    residual = sum(residual_pii_count(e.record) for e in entries)
     report.update({
         "entries": len(entries),
         "by_action": dict(Counter(e.record.get("action", "?") for e in entries)),
@@ -2203,7 +2230,7 @@ sys.exit(main())
 - [ ] **Step 4: 테스트 통과 확인 (전체)**
 
 Run: `PY -m pytest audit-engine`
-Expected: 모든 테스트 통과 (`test_cli.py` 9 passed 포함, 누적 85 passed)
+Expected: 모든 테스트 통과 (`test_cli.py` 9 passed 포함, 누적 86 passed)
 
 - [ ] **Step 5: 수동 스모크**
 
@@ -2219,7 +2246,7 @@ PY -m audit_engine verify --chain audit-engine/tests/nonexistent.jsonl   # {"val
 
 ### [P1-T9] cli.py
 - `verify`(실패 seq/사유 JSON), `report`(집계·만료·봉인/파기·잔여 PII 재스캔·이상 목록, `--out`), `shred --record-id|--expired --actor`, `unseal --record-id --actor`, `keygen`. shred/unseal은 `audit_shred`/`audit_unseal` 이벤트로 체인에 기록됨(파기 후 기록 순서 — 기록 실패 시 stderr에 error, exit 1).
-- 테스트: audit-engine 전체 85 passed. audit-engine 계획 완료.
+- 테스트: audit-engine 전체 86 passed. audit-engine 계획 완료.
 ```
 
 ```bash
@@ -2231,7 +2258,7 @@ git commit -m "feat(audit-engine): add operator CLI (verify/report/shred/unseal/
 
 ## 완료 기준 (Plan 1)
 
-- `PY -m pytest audit-engine` 전부 통과 (85 tests).
+- `PY -m pytest audit-engine` 전부 통과 (86 tests).
 - `PY -c "import audit_engine as a; print(a.__version__, a.AuditRecorder)"` 동작.
 - `ch3/3_5` 원본 무변경 (`git -C ../3_5 status`는 해당 없음 — 그 폴더는 git 저장소가 아니므로 파일 mtime으로 확인).
 - `PROCESS.md`에 `[P1-T1]`~`[P1-T9]` 기록.
