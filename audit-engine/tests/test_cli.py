@@ -123,3 +123,19 @@ def test_missing_secrets_fail_closed(env, monkeypatch, capsys):
     monkeypatch.delenv("AUDIT_KEK_B64")
     assert main(["shred", "--record-id", "x", "--actor", "a"]) == 1
     assert "AUDIT_KEK_B64" in capsys.readouterr().err
+
+
+def test_shred_records_intent_before_destroying_keys(env, capsys):
+    seed(env)
+    vault = env / "vault.json"
+    vault.unlink()
+    vault.mkdir()  # every vault read/write now fails with AuditStorageError
+    assert main(["shred", "--record-id", "req-1", "--actor", "auditor"]) == 1
+    assert "error:" in capsys.readouterr().err
+    assert chain_actions(env)[-1] == "audit_shred"  # intent was recorded even though the shred could not run
+
+
+def test_report_unwritable_out_fails_cleanly(env, capsys):
+    seed(env)
+    assert main(["report", "--out", str(env)]) == 1  # a directory, not a file
+    assert "error:" in capsys.readouterr().err

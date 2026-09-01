@@ -16,7 +16,7 @@ from uuid import uuid4
 from .chain import HASH_ALGORITHMS, HashChain
 from .config import DEFAULT_CHAIN_PATH, DEFAULT_VAULT_PATH
 from .crypto import generate_key, vault_record_ids
-from .errors import AuditConfigError, AuditError, KeyNotFoundError, SealIntegrityError
+from .errors import AuditConfigError, AuditError, AuditStorageError, KeyNotFoundError, SealIntegrityError
 from .recorder import AuditRecorder, residual_pii_count
 from .retention import RetentionPolicy
 from .schema import AuditEvent, utc_now
@@ -90,7 +90,10 @@ def cmd_report(args: argparse.Namespace) -> int:
         print(f"residual_plaintext_pii: {report['residual_plaintext_pii']}")
     print(f"anomalies: {report['anomalies']}")
     if args.out:
-        Path(args.out).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        try:
+            Path(args.out).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError as exc:
+            raise AuditStorageError(f"cannot write report {args.out}: {exc.__class__.__name__}") from exc
     return 0 if not report["anomalies"] else 1
 
 
@@ -107,11 +110,12 @@ def cmd_shred(args: argparse.Namespace) -> int:
             if e.sealed is not None and e.record["record_id"] in live and RetentionPolicy.is_expired(e.retention, today)
         ]
         mode = "expired"
-    shredded = [rid for rid in targets if recorder.vault.shred(rid)]
+    # Write-ahead: the intent to destroy keys is on the chain before any key is touched.
     recorder.record(_operator_event(
-        "audit_shred", args.actor, ",".join(targets), f"shredded:{len(shredded)}",
-        {"mode": mode, "requested": str(len(targets)), "shredded": str(len(shredded))},
+        "audit_shred", args.actor, ",".join(targets), f"shred_requested:{len(targets)}",
+        {"mode": mode, "requested": str(len(targets)), "targets": ",".join(targets)[:200]},
     ))
+    shredded = [rid for rid in targets if recorder.vault.shred(rid)]
     print(json.dumps({"requested": targets, "shredded": shredded}))
     return 0 if shredded else 1
 

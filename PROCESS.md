@@ -177,3 +177,4 @@
 ### [P1-T9] cli.py
 - `verify`(실패 seq/사유 JSON), `report`(집계·만료·봉인/파기·잔여 PII 재스캔·이상 목록, `--out`), `shred --record-id|--expired --actor`, `unseal --record-id --actor`, `keygen`. shred/unseal은 `audit_shred`/`audit_unseal` 이벤트로 체인에 기록됨(파기 후 기록 순서 — 기록 실패 시 stderr에 error, exit 1).
 - 테스트: audit-engine 전체 87 passed. audit-engine 계획 완료.
+- 리뷰 수정: shred는 감사 이벤트를 먼저 기록(write-ahead, result shred_requested:<n>)한 뒤 키를 파기; report --out 쓰기 실패는 AuditStorageError로 정리 종료. 회귀 테스트 2건 추가.
