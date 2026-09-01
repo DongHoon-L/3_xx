@@ -74,6 +74,29 @@ CLI는 서비스가 떠 있는 상태에서 실행해도 안전하다: 체인/�
 ..\..\prism\Scripts\python.exe -m pytest            # 두 패키지 모두 (네트워크/GPU 불필요, MockLLM)
 ```
 
+## 테스트 시나리오 (직접 돌려보기)
+
+서버를 띄운 상태에서 인증·가드·검색·감사 전 경로를 순서대로 실행하고 PASS/FAIL을 출력합니다 (HTTP 12단계 + 감사 CLI 7단계). 4번 단계에서 만든 기록 1건을 마지막에 crypto-shred 합니다.
+
+```powershell
+# 서버는 반드시 이 폴더(3_xx)에서 실행되어 있어야 함 (audit-data 경로가 동일해야 CLI 단계가 같은 체인을 봄)
+..\..\prism\Scripts\python.exe scripts\scenario.py                       # .env 의 첫 토큰 사용
+..\..\prism\Scripts\python.exe scripts\scenario.py --token <토큰> --timeout 300   # 실모델이 느리면 timeout 늘리기
+..\..\prism\Scripts\python.exe scripts\scenario.py --skip-cli            # HTTP 단계만
+```
+
+| 단계 | 기대 |
+|---|---|
+| 1–3 | `/health` 200, 토큰 없음/불일치 401 (`auth_denied` 감사) |
+| 4–5 | 코퍼스 질문 → `rag_answer` 200, 일반 질문 → `direct_answer` 200 |
+| 6–8 | 직접 인젝션·한국어 비밀 요구·난독화(`S Y S T E M`) → 403 + 탐지 라벨 |
+| 9–10 | 오염 문서/평문 키 문서 → 200, 답변에 비밀 없음 |
+| 11–12 | 70 KB 본문 → 413, `/documents` 는 id만 |
+| 13–14 | `verify` 0, `report` 잔여 PII 0·이상 징후 없음 |
+| 15–19 | `unseal` 원문 복원 → `shred` → `unseal` 거부(exit 1) → `verify` 여전히 0 → `report` 이상 없음(파기가 감사됨) |
+
+`LLM_PROVIDER=mock` 으로도 전 단계가 돌아갑니다(답변은 `[MOCK] …`). PowerShell 에서 `unseal` 출력의 한글이 깨져 보이면 `$env:PYTHONUTF8=1` 을 먼저 설정하세요.
+
 ## 보안 메모
 - 모델 출력은 비신뢰 텍스트. 출력 필터(비밀 패턴 + PII)가 응답 직전에 적용된다.
 - **가드는 lab03에서 이식한 정규식 시연이다.** NFKC·zero-width 제거·구분자 접기로 `S Y S T E M   O V E R R I D E`, `ＳＹＳＴＥＭ`, `SYSTEM_OVERRIDE` 같은 난독화까지는 잡고, 정화 후에도 명령형 문구가 남으면 문서 본문 전체를 `[REDACTED-BY-SR03: obfuscated instruction]`으로 버린다. 그래도 abliterated 모델에 대한 완전한 방어는 아니다 — 바꿔 쓴 지시는 통과할 수 있고, 실제 보상 통제는 **감사 추적과 출력 필터**다.

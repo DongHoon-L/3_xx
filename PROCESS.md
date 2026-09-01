@@ -263,3 +263,7 @@
 - 사용자 실행 결과: 일반 질문("넌 이름이 뭐니")이 `direct_answer`로 라우팅되면 문맥 전용 프롬프트 때문에 "The provided context is empty."만 반환; PowerShell 5.1이 `application/json`(charset 없음) 응답을 Latin-1로 읽어 `reason`의 한글이 깨져 보임.
 - 수정: ① `guard.DIRECT_SYSTEM_PROMPT` 신설(일반 답변·질문자 언어·비밀 노출 금지·입력은 데이터) → `Agent._direct_answer`가 사용; `HARDENED_SYSTEM_PROMPT`에도 "질문자 언어로 답하라" 추가. ② `api.UTF8JSONResponse`(`application/json; charset=utf-8`)를 기본 응답 클래스로, 403/502/413 및 `HTTPException` 응답에도 적용. ③ 테스트 격리: 사용자의 실제 `.env`가 `create_app`의 `load_dotenv`로 테스트에 새어 들어가 `test_startup_fails_closed_without_audit_secrets`가 실패하던 문제 → conftest autouse 픽스처로 테스트 중 `load_dotenv`를 무효화.
 - 테스트: 260 passed, 0 warnings (신규 3건: direct 프롬프트, DIRECT/HARDENED 규칙, charset 헤더 4경로).
+
+### [후속] 사용자용 테스트 시나리오 러너 추가
+- `scripts/scenario.py`: 실행 중인 서버에 HTTP 12단계(인증 401×2, 코퍼스/일반 질문, 직접·한국어·난독화 인젝션 403, 오염 문서·평문 키 문서 무유출, 413, `/documents` id만) + 감사 CLI 7단계(verify → report → unseal 원문 복원 → shred → unseal 거부 → verify → report 이상 없음)를 PASS/FAIL로 출력. `.env`에서 토큰·감사 설정을 읽고, CLI 자식 프로세스는 `PYTHONUTF8=1`로 실행(콘솔 코드페이지와 무관하게 한글 payload 복원).
+- 검증: mock 모드 임시 서버(포트 8766, 스크래치 audit-data)에 대해 19/19 PASS. README에 "테스트 시나리오" 절 추가.
