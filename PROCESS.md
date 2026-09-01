@@ -206,3 +206,19 @@
 - **문서**: `audit-engine/README.md` 신규(공개 API·env·CLI 표·운영 인계 사항: 체인/볼트당 서비스 1프로세스, CLI 동시 실행 안전성과 O(n) 재검증 비용, `record()`는 워커 스레드에서, `AuditError`→503, `findings`에 원본 PII가 있으므로 로깅 금지, 크래시 후 malformed_line 런북과 외부 앵커). `AuditRecorder` 독스트링에도 동일한 인계 요지.
 - 리뷰에서 **LEAVE**로 판정된 항목(T2 unhashable AuditEvent, T3, T4 finally unlink, T5, T7, M7)은 손대지 않음.
 - 테스트: audit-engine **125 passed**(89 → +36), 저장소 전체 **145 passed**. 수동 스모크(keygen → seed 2건 → verify → report → unseal → shred → unseal 거부 → verify/report 정상)와 동시성 스모크(서비스 프로세스가 열려 있는 동안 CLI `shred` 실행 → 서비스의 다음 append가 seq 재동기화, 볼트 키 유실 없음) 통과.
+
+
+
+
+### [P2-T3] guard.py
+- lab03의 SR-01/02/03 패턴·강화 시스템 프롬프트 이식. `check_question`, `sanitize_context`(REDACT + 비밀 MASK + UNTRUSTED 펜스), `filter_output`(비밀 패턴 + audit_engine PII 마스킹).
+- 테스트: `test_guard.py` 18 passed (오염 문서 무력화, 평문 키 마스킹, 유출 응답 마스킹).
+
+### [P2-T4] retriever.py
+- 순수 파이썬 TF-IDF(한글 2-gram 보강) 코사인 검색. 외부 호출 없음, 결정적, score 0 제외.
+- 테스트: `test_retriever.py` 6 passed.
+
+### [P2-T5] llm.py
+- `OpenAICompatClient`(`/v1/chat/completions`, temperature 0, `max_tokens`, `enable_thinking=false`, `<think>` 제거, 오류 4종 → `LLMError`, 폴백 없음), `MockLLM`(정화 안 된 override 문구가 남으면 유출 응답 재현).
+- 테스트: `test_llm.py` 12 passed (가짜 세션, 네트워크 없음).
+
