@@ -64,8 +64,9 @@ def test_malformed_body_after_auth_is_422(client, auth, app_env):
 
 @pytest.mark.parametrize("authenticated", [False, True])
 def test_oversized_body_is_413_before_auth_and_not_audited(client, auth, app_env, authenticated):
+    assert 70_000 > MAX_BODY_BYTES
     headers = {**JSON_HEADERS, **auth} if authenticated else JSON_HEADERS
-    response = client.post("/agent", content=b"x" * (MAX_BODY_BYTES + 5536), headers=headers)
+    response = client.post("/agent", content=b"x" * 70_000, headers=headers)
     assert response.status_code == 413 and response.json() == {"detail": "body too large"}
     # empty either way: no auth_denied for the anonymous call, no agent_query for the authenticated one,
     # which is only possible if the rejection happened before the body was read
@@ -78,7 +79,7 @@ def test_body_of_unknown_size_is_refused(client, app_env):
     assert response.status_code == 413 and records(app_env) == []
 
 
-def test_body_at_the_limit_still_reaches_auth(client, app_env):
+def test_body_within_the_limit_reaches_auth(client, app_env):
     body = json.dumps({"question": "가" * 100}).encode("utf-8")
     assert len(body) < MAX_BODY_BYTES
     assert client.post("/agent", content=body, headers=JSON_HEADERS).status_code == 401
