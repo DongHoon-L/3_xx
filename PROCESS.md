@@ -156,3 +156,7 @@
 - 3_5의 SHA-256 XOR 스트림 암호를 폐기하고 `cryptography` AESGCM으로 교체: `seal/unseal`(AAD=record_id), `KeyVault`(DEK를 KEK로 래핑, 원자적 쓰기, `shred`), `vault_record_ids`.
 - 테스트: `test_crypto.py` 11 passed (AAD 불일치·키 오류·변조·잘못된 KEK 모두 실패 확인).
 - 리뷰 수정: _save 실패 시 임시 파일 정리(try/finally) + 회귀 테스트.
+
+### [P1-T5] masking.py / deidentification.py 이식
+- `masking.py`는 3_5 원본 그대로. `deidentification.py`는 하드코딩 secret `b"audit-engine"` 제거, `secret` 필수(키워드 전용).
+- 테스트: 10 passed (마스킹 후 재스캔 0, secret 의존성·필수성).
