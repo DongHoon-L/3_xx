@@ -183,3 +183,7 @@
 - Task 1~9 모두 구현·리뷰 통과. 수정 라운드 2회: T4(볼트 임시 파일 정리), T9(shred 감사 이벤트 write-ahead + `--out` 실패 정리 종료). 최종 테스트 89 passed.
 - 스펙 대비 의도된 변경(원장 판정): ① recorder 마스킹을 purpose/details로 한정 ② `shred`는 키 파기 **전에** `audit_shred`(result `shred_requested:<n>`) 기록 — 스펙 §4.9의 "파기 후 기록"보다 감사 가능성이 우선 ③ 예외 계층을 `errors.py`로 분리, `AuditStorageError` 추가.
 - 리뷰에서 보류(Minor)된 항목은 `.superpowers/sdd/2026-09-01-audit-engine/progress.md` 원장에 기록, 최종 전체 리뷰에서 재판정.
+
+### [P2-T1] rag-agent 스캐폴딩 + 코퍼스
+- `rag-agent/pyproject.toml`(deps: fastapi, uvicorn, requests, python-dotenv, audit-engine), 합성 코퍼스 4건(weather/policy/api_guide(가짜 키)/poisoned(간접 인젝션)), `documents.py`(검증 로더). editable 설치.
+- 테스트: `test_documents.py` 6 passed.
