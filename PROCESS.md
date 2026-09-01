@@ -173,3 +173,7 @@
 - `AuditRecorder.record`: validate → `protect_record`(actor 가명화 + purpose/details만 마스킹; 식별자·타임스탬프는 보존) → sensitive 봉인(중복 record_id 거부) → 보존 → chain.append. `unseal`로 조사용 복호화. `residual_pii_count`로 자유 텍스트 잔여 PII 0 확인.
 - `__init__.py` 공개 API 정리.
 - 테스트: audit-engine 전체 78 passed.
+
+### [P1-T9] cli.py
+- `verify`(실패 seq/사유 JSON), `report`(집계·만료·봉인/파기·잔여 PII 재스캔·이상 목록, `--out`), `shred --record-id|--expired --actor`, `unseal --record-id --actor`, `keygen`. shred/unseal은 `audit_shred`/`audit_unseal` 이벤트로 체인에 기록됨(파기 후 기록 순서 — 기록 실패 시 stderr에 error, exit 1).
+- 테스트: audit-engine 전체 87 passed. audit-engine 계획 완료.
