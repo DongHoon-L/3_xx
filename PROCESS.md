@@ -151,3 +151,7 @@
 ### [P1-T3] chain.py
 - 증분 JSONL 해시체인: `append`(lock+fsync), `verify`(실패 seq/사유: previous_hash_mismatch·entry_hash_mismatch·seq_gap·malformed_line), `open`(손상 시 ChainCorruptError), OSError→AuditStorageError.
 - 테스트: `test_chain.py` 11 passed (변조 4종 포함).
+
+### [P1-T4] crypto.py
+- 3_5의 SHA-256 XOR 스트림 암호를 폐기하고 `cryptography` AESGCM으로 교체: `seal/unseal`(AAD=record_id), `KeyVault`(DEK를 KEK로 래핑, 원자적 쓰기, `shred`), `vault_record_ids`.
+- 테스트: `test_crypto.py` 11 passed (AAD 불일치·키 오류·변조·잘못된 KEK 모두 실패 확인).
