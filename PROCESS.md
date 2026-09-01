@@ -162,7 +162,7 @@
 - 테스트: 10 passed (마스킹 후 재스캔 0, secret 의존성·필수성).
 
 ### [P1-T6] retention.py + 정책 JSON
-- 3_5 정책 유지 + `agent_query`(1년)/`agent_query_blocked`·`auth_denied`(3년)/`audit_shred`·`audit_unseal`(5년) 추가. 타임스탐프 오류 시 `now()` 대체 제거 → 예외.
+- 3_5 정책 유지 + `agent_query`(1년)/`agent_query_blocked`·`auth_denied`(3년)/`audit_shred`·`audit_unseal`(5년) 추가. 타임스탬프 오류 시 `now()` 대체 제거 → 예외.
 - 테스트: `test_retention.py` 8 passed.
 
 ### [P1-T7] config.py
@@ -191,3 +191,18 @@
 ### [P2-T2] auth.py
 - `RAG_API_KEYS="token:actor:role,..."` 파서(형식·중복·빈 목록 거부), `authenticate`(Bearer, `hmac.compare_digest` 전수 비교, `missing_token`/`invalid_token`).
 - 테스트: `test_auth.py` 14 passed.
+
+### [P1 최종 리뷰 수정] audit-engine
+전체 브랜치 리뷰의 판정(FIX 항목)을 한 번에 반영. 커밋 4개(잠금·재동기화 / 예외 계약 / 운영 이벤트·리포트 / 문서).
+
+- **C1 (최우선) 다중 프로세스 쓰기 충돌**: 서비스와 CLI가 동시에 쓰면 `seq`가 중복되고(→ `seq_gap`) 볼트에 방금 저장한 DEK가 유실되던 문제. 새 모듈 `filelock.py`(`exclusive_lock`, Windows `msvcrt.locking` / POSIX `fcntl.flock`, 데드라인 재시도, 타임아웃 → `AuditStorageError`)를 추가하고 `HashChain.append`와 `KeyVault`의 모든 load→mutate→save에 걸었다. `append`는 잠금을 쥔 채 디스크 꼬리와 메모리 상태를 대조하고, 다르면 전체 재검증 후 재동기화하거나 `ChainCorruptError`로 거부한다(체인 분기 금지). 꼬리 엔트리의 해시도 재계산해 변조된 꼬리 위에 append하지 않는다. **M4**(`open()` 없이 만든 인스턴스가 `seq=1`부터 다시 쓰던 문제)도 이 재동기화로 해소.
+- **I1 예외 계약 누수**: `record()`가 `AuditError` 밖의 예외를 던지던 경로 제거 — 직렬화 불가 `sensitive` → `AuditValidationError("sensitive")`, JSON 객체가 아닌 볼트 파일 → `AuditStorageError(... is corrupt)`, 정책 파일은 `RetentionPolicy` 생성 시 검증(`AuditConfigError`)하여 `for_event`가 `KeyError`를 낼 수 없게 함(**M6/T6** 동시 해소).
+- **I2/I3/M3 운영 이벤트**: `shred`/`unseal`이 대상마다 이벤트 1~2건을 남기고 `record_id`가 **대상 id 그 자체**가 되도록 변경(`purpose`/`details`는 마스킹·절단되어 상관 키로 부적합). `shred`는 대상별 선기록(`shred_requested`) → 파기 → 결과(`shredded`|`not_found`), `unseal`은 항상 1건(`unsealed`|`denied:<Exception>`|`not_found` — 체인에 없는 id 열람 시도가 그동안 무기록이었음).
+- **I4 꼬리 절단 탐지(부분) + 외부 앵커**: `report`에 `orphan_keys`/`unaudited_shred` 이상 징후(둘 다 종료코드 1), `verify --expect-tail SEQ:HASH` 추가. 스펙 §4.2에 "무결성 모델과 잔여 위험"(키 없는 해시체인은 전체 재작성·절단을 자력으로 탐지 못함)과 §4.9·§6 갱신.
+- **I5 볼트 덮어쓰기**: `KeyVault.put`이 잠금 안에서 중복 `record_id`를 거부(`AuditValidationError`). recorder의 `has()` 선검사(TOCTOU)는 제거 — 볼트가 유일한 권위.
+- **M1**: 보존 기간 계산을 봉인/`vault.put` **앞으로** 이동 → `put` 이후 실패 가능 지점은 `chain.append`뿐(고아 키 방지).
+- **M2**: `date.today()` → `datetime.now(timezone.utc).date()`(`_today_utc`). 만료 관련 테스트는 2020-01-01(만료) / 2099-01-01(미만료)로 고정해 달력에 따라 뒤집히지 않게 함.
+- **M5**: `cryptography>=42,<51`로 상한 고정. **M8**: PROCESS.md 오타(타임스탐프→타임스탬프), `config.py`의 `except (ValueError, binascii.Error)` → `except ValueError`(binascii.Error는 ValueError 하위).
+- **문서**: `audit-engine/README.md` 신규(공개 API·env·CLI 표·운영 인계 사항: 체인/볼트당 서비스 1프로세스, CLI 동시 실행 안전성과 O(n) 재검증 비용, `record()`는 워커 스레드에서, `AuditError`→503, `findings`에 원본 PII가 있으므로 로깅 금지, 크래시 후 malformed_line 런북과 외부 앵커). `AuditRecorder` 독스트링에도 동일한 인계 요지.
+- 리뷰에서 **LEAVE**로 판정된 항목(T2 unhashable AuditEvent, T3, T4 finally unlink, T5, T7, M7)은 손대지 않음.
+- 테스트: audit-engine **125 passed**(89 → +36), 저장소 전체 **145 passed**. 수동 스모크(keygen → seed 2건 → verify → report → unseal → shred → unseal 거부 → verify/report 정상)와 동시성 스모크(서비스 프로세스가 열려 있는 동안 CLI `shred` 실행 → 서비스의 다음 append가 seq 재동기화, 볼트 키 유실 없음) 통과.

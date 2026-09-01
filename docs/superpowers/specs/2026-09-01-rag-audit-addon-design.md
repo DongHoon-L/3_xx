@@ -17,7 +17,7 @@
 
 **비범위 (하지 않음)**
 - `ch1/*`, `ch3/3_5` 원본 수정
-- 다중 프로세스/다중 워커 동시 쓰기 지원 (단일 쓰기 프로세스 전제)
+- 다중 프로세스/다중 워커 동시 쓰기 지원 (서비스는 단일 쓰기 프로세스 전제 — 운영 CLI의 동시 실행만 §4.2의 파일 잠금으로 안전하게 허용)
 - 사용자 DB·세션·OAuth 등 본격 인증 (정적 Bearer 허용목록만)
 - 임베딩 API 기반 검색 (로컬 TF-IDF만)
 - LLM 기반 도구 선택 (규칙 기반만)
@@ -82,9 +82,20 @@ class AuditEvent:
 - `entry_hash = H(canonical_json({"seq","record","sealed","retention","previous_hash"}))`, `H` ∈ {sha256(기본), sha512, sha3_256}. `canonical_json = json.dumps(obj, ensure_ascii=False, sort_keys=True, separators=(",", ":"))` UTF-8.
 - 제네시스 `previous_hash = "GENESIS"`, `seq`는 1부터 연속.
 - `HashChain.open(path, algorithm)`: 파일이 없으면 빈 체인(첫 append 시 생성). 있으면 **전체 검증** 후 마지막 `(seq, entry_hash)`를 메모리에 유지. 검증 실패 → `ChainCorruptError` (손상된 체인 위에 append 금지 = fail-closed).
-- `append(record, sealed, retention) -> ChainEntry`: `threading.Lock` 안에서 한 줄 write + flush + `os.fsync`.
-- `verify() -> ChainVerification(valid: bool, entries_checked: int, failed_seq: int | None, reason: str | None)`; `reason` ∈ `previous_hash_mismatch | entry_hash_mismatch | seq_gap | malformed_line`.
+- `append(record, sealed, retention) -> ChainEntry`: `threading.Lock` **+ 프로세스 간 배타 파일 잠금**(`filelock.exclusive_lock(<path>.lock)`, Windows `msvcrt` / POSIX `fcntl`) 안에서 한 줄 write + flush + `os.fsync`. 잠금을 쥔 채 디스크의 마지막 줄을 읽어 메모리의 `(seq, entry_hash)`와 비교하고, 다르면(다른 프로세스가 append했거나 파일이 재작성됨) 전체 `verify` 후 재동기화한다. 검증 실패 시 `ChainCorruptError` — 체인을 분기시키지 않는다(fail-closed). 대가는 외부 쓰기 직후 첫 append의 O(n) 재검증.
+- `verify() -> ChainVerification(valid: bool, entries_checked: int, failed_seq: int | None, reason: str | None)`; `reason` ∈ `previous_hash_mismatch | entry_hash_mismatch | seq_gap | malformed_line | tail_mismatch`(`--expect-tail` 사용 시).
 - `iter_entries()`: 읽기 전용 순회 (CLI report/shred 용).
+
+**무결성 모델과 잔여 위험**
+
+이 체인은 **키 없는(unkeyed) 해시체인**이다. 해시를 다시 계산하지 못하는 공격자(로그 수집기, 실수로 편집한 운영자, 파일 일부만 건드린 침입자)의 **내부 변조·중간 줄 삭제**는 `verify`가 seq/해시로 잡아낸다. 그러나 체인 파일에 **쓰기 권한이 있는 공격자가 전체를 재작성하거나 꼬리를 잘라내면**(entry 1..k만 남기고 절단) 남은 부분은 그 자체로 정합하므로 `verify` 단독으로는 탐지되지 않는다. HMAC/서명이나 외부 앵커 없이는 원리적으로 불가능하다.
+
+완화책(현 구현):
+1. **외부 앵커** — 소비자(rag-agent 등)가 append된 엔트리의 `seq:entry_hash`를 자신의 로그에 남기고, 점검 시 `python -m audit_engine verify --expect-tail SEQ:HASH`로 대조한다. 불일치 → `valid=false`, `reason="tail_mismatch"`, 종료코드 1.
+2. **`report` 이상 징후** — `orphan_keys`(체인에 대응 엔트리가 없는 볼트 키: 해당 엔트리가 사라졌다는 신호), `unaudited_shred`(봉인 엔트리인데 키가 없고 `audit_shred`/`shredded` 기록도 없음: CLI를 거치지 않은 파기 또는 기록 삭제). 둘 다 종료코드 1.
+3. **봉인 원문은 위조 불가** — AES-256-GCM + `aad=record_id`이므로, KEK 없이는 엔트리를 그럴듯하게 지어낼 수 없다(삭제만 가능).
+
+즉 이 설계는 **삭제·절단을 은폐할 수는 없게** 만들지만(외부 앵커 대조 시), 파일 자체만으로 절단을 증명하지는 못한다. 프로덕션에서는 체인 해시를 외부 저장소(WORM, 다른 신뢰 도메인의 로그)에 주기적으로 앵커링해야 한다.
 
 ### 4.3 `crypto.py` — AES-256-GCM 봉인 + KEK 래핑 볼트
 
@@ -145,13 +156,15 @@ class AuditRecorder:
 
 | 명령 | 인자 | 동작 | 종료코드 |
 |---|---|---|---|
-| `verify` | `[--chain P]` | 전체 검증 결과 JSON 출력 | 0 정상 / 1 손상 |
-| `report` | `[--chain P] [--out r.json]` | 엔트리 수, action별·result별 집계, 만료 건수(오늘 기준), 봉인/파기 건수, 잔여 평문 PII 재스캔 수, 체인 검증 결과. 사람용 요약은 stdout, JSON은 `--out` | 0 / 1(체인 손상 또는 잔여 PII>0) |
-| `shred` | `--record-id X` 또는 `--expired`, `--actor NAME` | DEK 파기 후 `audit_shred` 이벤트를 체인에 append (`purpose`=대상 id 목록, `result`=`shredded:<n>`) | 0 / 1(대상 없음) |
-| `unseal` | `--record-id X --actor NAME` | 봉인 원문을 stdout에 JSON 출력 + `audit_unseal` 이벤트 append | 0 / 1(키 없음·무결성 실패) |
+| `verify` | `[--chain P] [--expect-tail SEQ:HASH]` | 전체 검증 결과 JSON 출력. `--expect-tail`을 주면 검증 통과 후 마지막 엔트리의 `(seq, entry_hash)`를 대조 → 불일치 시 `valid=false`, `reason="tail_mismatch"` | 0 정상 / 1 손상·꼬리 불일치 |
+| `report` | `[--chain P] [--vault P] [--out r.json]` | 엔트리 수, action별·result별 집계, 만료 건수(UTC 오늘 기준), 봉인/파기 건수, 잔여 평문 PII 재스캔 수, `orphan_keys`·`unaudited_shred`, 체인 검증 결과. 사람용 요약은 stdout, JSON은 `--out` | 0 / 1(체인 손상, 잔여 PII>0, orphan_keys, unaudited_shred) |
+| `shred` | `--record-id X` 또는 `--expired`, `--actor NAME` | 대상마다 **선기록(write-ahead) → 파기 → 결과 기록** 순으로 `audit_shred` 이벤트 2건 append. `record_id`=대상 id, `result`=`shred_requested` → `shredded`\|`not_found`, `details={"mode": "record_id"\|"expired"}` | 0(1건 이상 파기) / 1(대상 없음·파기 0건) |
+| `unseal` | `--record-id X --actor NAME` | 봉인 원문을 stdout에 JSON 출력. 성공·실패 무관하게 `audit_unseal` 이벤트 **정확히 1건** append (`record_id`=대상 id, `result`=`unsealed`\|`denied:<ExceptionName>`\|`not_found`) | 0 / 1(체인에 없음·키 없음·무결성 실패) |
 | `keygen` | | 32B 랜덤 base64 1줄 출력 | 0 |
 
 `shred`/`unseal`은 `AuditRecorder`를 통해 기록되므로 동일한 env(비밀값)가 필요하다. CLI의 `actor`는 `--actor`로 명시(필수), `role="operator"`, `department="audit"`, `source_ip="cli"`.
+
+운영 이벤트의 `record_id`는 **대상 record_id 그 자체**다(새 UUID가 아님). `purpose`/`details`는 마스킹·200자 절단 대상이라 상관 키로 쓸 수 없기 때문이다. `shred`의 선기록은 "파기 의도"가 키보다 먼저 체인에 남는다는 뜻이며, 결과 기록의 append가 실패하면 의도 기록만 남은 채 `AuditError`가 전파된다(종료코드 1) — 감사되지 않은 파기는 발생하지 않는다.
 
 ## 5. rag-agent
 
@@ -263,7 +276,9 @@ class AuditHook:
 | 시스템 프롬프트/비밀 | 인증 사용자 | 질문(직접 인젝션) | 비밀 유출 | SR-01/02 → 403 + 기록 |
 | 시스템 프롬프트/비밀 | 문서 오염자 | 코퍼스 문서(간접 인젝션) | 모델 지시 탈취 | SR-03 정화 + 강화 시스템 프롬프트 + 기록 |
 | 비밀/PII | 모델 출력 | 답변 | 유출 | 출력 필터, 모델 출력은 텍스트로만 취급 |
-| 감사 무결성 | 파일 접근자 | `chain.jsonl` | 위변조·삭제 | 해시체인 + seq + AAD, `verify` |
+| 감사 무결성 | 파일 접근자 | `chain.jsonl` | 내부 위변조·중간 삭제 | 해시체인 + seq, `verify` (해시를 재계산하지 못하는 공격자 한정) |
+| 감사 무결성 | 체인 파일 쓰기 권한자 | `chain.jsonl` 전체 재작성·꼬리 절단 | 기록 은폐 | **`verify` 단독으로는 탐지 불가** (§4.2 무결성 모델). 완화: 외부 앵커 `verify --expect-tail`, `report`의 `orphan_keys`/`unaudited_shred`, 봉인 원문 위조 불가 |
+| 감사 무결성 | 동시 쓰기 프로세스 | 서비스 + CLI 동시 실행 | seq 중복·DEK 유실 | `<file>.lock` 프로세스 간 배타 잠금 + append 시 꼬리 재동기화 |
 | 감사 원문 | 파일 접근자 | `vault.json`, sealed | 원문 노출 | DEK는 KEK로 래핑, KEK는 env에만 |
 | 예산 | 인증 사용자 | 긴 질문/반복 | 비용 폭주 | 질문 길이 상한, `max_tokens`, `top_k≤5`, 타임아웃 |
 

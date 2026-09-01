@@ -36,6 +36,17 @@ def residual_pii_count(record: dict) -> int:
 
 
 class AuditRecorder:
+    """The add-on entry point: one recorder per service process, one service process per chain/vault.
+
+    Run the service with a single writer (`uvicorn --workers 1`). The operator CLI may run while the
+    service is up: chain and vault writes take a cross-process file lock and `HashChain.append`
+    resyncs from the on-disk tail, so nothing is lost or forked — but the service pays an O(n)
+    re-verify on its first append after a CLI write.
+
+    `record()` blocks on fsync and rewrites the whole vault when `sensitive` is given; call it from a
+    worker thread in async servers and translate `AuditError` into a fail-closed response.
+    """
+
     def __init__(self, config: AuditConfig) -> None:
         self._config = config
         self._chain = HashChain.open(config.chain_path, config.hash_algorithm)
