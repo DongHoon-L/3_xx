@@ -207,9 +207,6 @@
 - 리뷰에서 **LEAVE**로 판정된 항목(T2 unhashable AuditEvent, T3, T4 finally unlink, T5, T7, M7)은 손대지 않음.
 - 테스트: audit-engine **125 passed**(89 → +36), 저장소 전체 **145 passed**. 수동 스모크(keygen → seed 2건 → verify → report → unseal → shred → unseal 거부 → verify/report 정상)와 동시성 스모크(서비스 프로세스가 열려 있는 동안 CLI `shred` 실행 → 서비스의 다음 append가 seq 재동기화, 볼트 키 유실 없음) 통과.
 
-
-
-
 ### [P2-T3] guard.py
 - lab03의 SR-01/02/03 패턴·강화 시스템 프롬프트 이식. `check_question`, `sanitize_context`(REDACT + 비밀 MASK + UNTRUSTED 펜스), `filter_output`(비밀 패턴 + audit_engine PII 마스킹).
 - 테스트: `test_guard.py` 18 passed (오염 문서 무력화, 평문 키 마스킹, 유출 응답 마스킹).
@@ -222,28 +219,26 @@
 - `OpenAICompatClient`(`/v1/chat/completions`, temperature 0, `max_tokens`, `enable_thinking=false`, `<think>` 제거, 오류 4종 → `LLMError`, 폴백 없음), `MockLLM`(정화 안 된 override 문구가 남으면 유출 응답 재현).
 - 테스트: `test_llm.py` 12 passed (가짜 세션, 네트워크 없음).
 
-
-
-
-
 ### [P2-T6] config.py
 - `Settings.from_env`(RAG_API_KEYS 필수, LLM_* / RAG_* 기본값·범위 검증, `repr` 비밀 미노출), `build_llm_client`(mock / openai_compat).
-- 테스트: `test_config.py` 15 passed.
-
-
-
+- 테스트: `test_config.py` 14 passed (계획 문서의 15는 오기).
 
 ### [P2-T7] agent.py
 - 도구 허용목록 3종 + 규칙 라우팅(목록 키워드 → 검색 관련도 → 일반). `run`: 가드 차단 시 LLM 미호출, 검색 문맥 SR-03 정화 후 `[doc:id]` 태그로 프롬프트 조립, 출력 필터 적용, LLMError → status=error.
 - 테스트: 16 passed (오염 문서 정화, SR-03 우회 시 출력 필터가 2차 방어, LLM 장애).
 
-
-
-
 ### [P2-T8] audit_hook.py
 - `AgentTrace`→`AuditEvent` 매핑(action `agent_query`/`agent_query_blocked`/`auth_denied`, result 규약, details 9키, purpose 200자, sealed={question, answer, contexts}). audit_engine 호출은 이 파일뿐.
 - 테스트: `test_audit_hook.py` 6 passed (체인 파일 잔여 PII 0, 봉인 원문 복원, 실패 전파).
 
+### [P2-T9] api.py
+- `create_app` 팩토리(FastAPI). 인증 → 에이전트 → 감사 → 응답. 401/400/403/502/**503(audit_unavailable, 답변 폐기)** 매핑. `/documents`는 id만 노출. 앱 로그에 질문/답변 없음.
+- 테스트: `test_api.py` 12 passed; 전체 스위트 통과.
 
-Note: the Task 6 line above says "15 passed" verbatim per the brief; actual count is 14
-(see Task 6 deviation note). Reproduced verbatim as instructed rather than edited.
+### [P2-T10] README / .env.example / 통합 스모크
+- README(설치·실행·curl·CLI·상태코드 표·보안 메모), `.env.example`(값 비움, 생성 명령 주석). 감사 CLI/보안 메모 절에 `audit-engine/README.md` 인계 사항(체인/볼트당 서비스 1프로세스, CLI는 파일 잠금 덕에 서비스와 동시 실행 안전, `record()`는 fsync에서 블로킹, `shred`/`unseal`의 대상별 이벤트, `verify --expect-tail`, `report`의 `orphan_keys`/`unaudited_shred`)를 병합.
+- 통합 스모크는 **MOCK 모드**로 실행(WSL 27B 모델 서버 기동은 GPU 로딩에 수 분이 걸리는 사용자 몫이라 이번 세션에서 띄우지 않음; README §실행 1번과 WSL 관련 단계는 사용자가 별도로 검증). 실제 `uvicorn` 프로세스(포트 8765, `LLM_PROVIDER=mock`)로 나머지 전 경로(인증→가드→검색→감사→봉인→파기)를 실제 CLI/HTTP로 실행:
+  - `/health` 200. README curl 4종: 200(날씨 답변)/403(SR-01·SR-02 직접 인젝션 차단)/200(오염 문서 `poisoned` → 답변에 비밀 无유출, SR-03 정화 확인)/401(`missing_token`).
+  - `verify` exit 0 (`entries_checked=4`) → `report` `entries=4`, `residual_plaintext_pii=0`, `orphan_keys=0`, `unaudited_shred=0`, `anomalies=[]`. `chain.jsonl`에 `alice` 평문 없음(`grep -c alice` → 0).
+  - 정상 질의(날씨, `record_id=8a16e1b2-...`) `unseal` → 원문(질문/답변/정화된 문맥) 복원 성공(exit 0) → `shred --record-id` → `{"shredded": ["8a16e1b2-..."]}`(exit 0) → 재`unseal` → `KeyNotFoundError`로 거부(exit 1) → `verify` 여전히 exit 0(`entries_checked=9`, 암호문은 남고 키만 소멸) → `report` `anomalies=[]` 유지(`shredded_count=1`).
+- rag-agent 계획(Plan 2) 완료. 전체 테스트: `PY -m pytest` → **223 passed**(audit-engine 125 + rag-agent 98; `test_api.py` 12건 포함), 1 warning(업스트림 `StarletteDeprecationWarning: httpx→httpx2`, 코드 결함 아님 — 상세는 batch-C-report.md 참고).
