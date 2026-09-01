@@ -40,6 +40,10 @@ class Retriever:
         self._idf = {term: math.log((1 + n) / (1 + freq)) + 1 for term, freq in df.items()}
         self._vectors = [self._vectorize(counts) for counts in term_counts]
 
+    @property
+    def documents(self) -> tuple[Document, ...]:
+        return tuple(self._documents)
+
     def _vectorize(self, counts: Counter[str]) -> dict[str, float]:
         vector = {term: count * self._idf[term] for term, count in counts.items() if term in self._idf}
         norm = math.sqrt(sum(value * value for value in vector.values())) or 1.0

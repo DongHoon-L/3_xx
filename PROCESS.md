@@ -222,3 +222,28 @@
 - `OpenAICompatClient`(`/v1/chat/completions`, temperature 0, `max_tokens`, `enable_thinking=false`, `<think>` 제거, 오류 4종 → `LLMError`, 폴백 없음), `MockLLM`(정화 안 된 override 문구가 남으면 유출 응답 재현).
 - 테스트: `test_llm.py` 12 passed (가짜 세션, 네트워크 없음).
 
+
+
+
+
+### [P2-T6] config.py
+- `Settings.from_env`(RAG_API_KEYS 필수, LLM_* / RAG_* 기본값·범위 검증, `repr` 비밀 미노출), `build_llm_client`(mock / openai_compat).
+- 테스트: `test_config.py` 15 passed.
+
+
+
+
+### [P2-T7] agent.py
+- 도구 허용목록 3종 + 규칙 라우팅(목록 키워드 → 검색 관련도 → 일반). `run`: 가드 차단 시 LLM 미호출, 검색 문맥 SR-03 정화 후 `[doc:id]` 태그로 프롬프트 조립, 출력 필터 적용, LLMError → status=error.
+- 테스트: 16 passed (오염 문서 정화, SR-03 우회 시 출력 필터가 2차 방어, LLM 장애).
+
+
+
+
+### [P2-T8] audit_hook.py
+- `AgentTrace`→`AuditEvent` 매핑(action `agent_query`/`agent_query_blocked`/`auth_denied`, result 규약, details 9키, purpose 200자, sealed={question, answer, contexts}). audit_engine 호출은 이 파일뿐.
+- 테스트: `test_audit_hook.py` 6 passed (체인 파일 잔여 PII 0, 봉인 원문 복원, 실패 전파).
+
+
+Note: the Task 6 line above says "15 passed" verbatim per the brief; actual count is 14
+(see Task 6 deviation note). Reproduced verbatim as instructed rather than edited.
