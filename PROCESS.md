@@ -168,3 +168,8 @@
 ### [P1-T7] config.py
 - `AuditConfig.from_env`: `AUDIT_PSEUDONYM_SECRET`(≥16자)·`AUDIT_KEK_B64`(32B) 필수, 알고리즘 허용목록, 정책 파일 존재 검사. `repr`에 비밀값 미노출.
 - 테스트: `test_config.py` 10 passed.
+
+### [P1-T8] recorder.py + 공개 API
+- `AuditRecorder.record`: validate → `protect_record`(actor 가명화 + purpose/details만 마스킹; 식별자·타임스탬프는 보존) → sensitive 봉인(중복 record_id 거부) → 보존 → chain.append. `unseal`로 조사용 복호화. `residual_pii_count`로 자유 텍스트 잔여 PII 0 확인.
+- `__init__.py` 공개 API 정리.
+- 테스트: audit-engine 전체 78 passed.
