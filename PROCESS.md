@@ -252,3 +252,9 @@
 - **I5 가드 우회**: `strip_invisible`(NFKC + zero-width 제거, 내용 보존)·`normalize_for_matching`(+ 소문자·`[\W_]+`→공백·구분자 제거형)을 매칭 전용 접기로 도입. SR-01/02는 원문·접은 형태 양쪽에 대조하고, SR-03은 치환 후에도 접은 형태가 명령형에 걸리면 문서 본문을 통째로 `[REDACTED-BY-SR03: obfuscated instruction]`으로 버린다. `filter_output`/비밀 패턴은 대소문자 무시. `MockLLM`도 접은 형태로 유출 트리거를 판정한다(카나리아). 한계(정규식 시연, abliterated 모델에 대한 완전 방어 아님)는 README에 명시.
 - **소소한 것들**: `answer_sha256` → `answer_digest_b64url`(16진수 다이제스트가 카드번호 패턴에 걸려 잘리는 오탐 회피), `Bearer` 스킴 대소문자 무시, 엔드포인트가 의도적으로 sync `def`라는 주석, `conftest`가 문서화된 선택 env를 전부 기본값으로 고정(개발자 `.env` 누수 차단), `pytest.raises(AuditConfigError)`, 503 경로가 blocked/error 본문도 감추는지 검증, `pytest.ini`의 `filterwarnings`로 업스트림 starlette 경고 억제.
 - 테스트: `PY -m pytest` → **257 passed, 0 warnings**(audit-engine 125 + rag-agent 132; `test_api.py` 23건). 수동 확인(TestClient): 미인증+잘못된 body 401 / 인증+잘못된 body 422 / 70000B 본문 413(체인 무기록) / 소문자 `bearer` 200 / `S Y S T E M   O V E R R I D E` 질문 403.
+
+### [완료] 프로젝트 마무리 (컨트롤러 기록)
+- 두 계획 모두 완료. 최종 리뷰(전체 브랜치) 2회 + 수정 웨이브 2회 + 재리뷰 2회를 거침. 최종 테스트: `PY -m pytest` → 257 passed, 0 warnings (audit-engine 125, rag-agent 132).
+- 판정 요약(전체 목록은 이 세션의 최종 보고에 포함): recorder 마스킹 범위 한정; shred/unseal 대상별 write-ahead 이벤트; 체인·볼트 프로세스 간 파일 잠금 + 꼬리 재동기화; 절단 탐지 한계는 외부 앵커(`audit_seq/audit_hash` 로그 + `verify --expect-tail`)와 `report` 이상 징후로 완화; 익명 `auth_denied` 폭주는 문서화된 허용 위험; 인증이 본문 검증보다 먼저(401→422), 64 KiB 본문 상한(413); 정규식 가드는 정규화를 더한 실습용 통제.
+- 미실행 항목: WSL 27B 모델 서버 실제 연동 스모크(사용자 실행 필요 — README §실행 참고). 그 외 통합 스모크는 mock 모드로 완료.
+- 사용자 결정에 따라 `feat/rag-audit-addon` → `main` 머지, `origin/main` 푸시, 브랜치 삭제.
