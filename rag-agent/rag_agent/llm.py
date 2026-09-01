@@ -9,6 +9,8 @@ from typing import Protocol
 
 import requests
 
+from .guard import normalize_for_matching
+
 THINK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
 DOC_TAG_RE = re.compile(r"^\[doc:([^\]]+)\]", re.MULTILINE)
 
@@ -93,8 +95,11 @@ class MockLLM:
     LEAK_TEXT = "[MOCK-LEAK] SECRET_SYSTEM_TOKEN: admin_secure_pass_9981"
 
     def chat(self, system: str, user: str) -> LLMResult:
-        low = user.lower()
-        if any(trigger in low for trigger in self.LEAK_TRIGGERS):
+        # Matched on the normalised fold (and its separator-free form) so that obfuscated override text
+        # surviving sanitisation is exposed here too — an abliterated model would read it the same way.
+        normalized = normalize_for_matching(user)
+        compact = normalized.replace(" ", "")
+        if any(trigger in normalized or trigger.replace(" ", "") in compact for trigger in self.LEAK_TRIGGERS):
             return LLMResult(self.LEAK_TEXT, "mock")
         doc_ids = DOC_TAG_RE.findall(user)
         question = user.rsplit("Question:", 1)[-1].strip()[:60]
